@@ -60,6 +60,14 @@ contained instructions and print mismatches between the trace and RzIL if found:
 rz-tracetest mytrace.frames
 ```
 
+For machine-readable CI results, pass `-J report.json`. The report follows the
+versioned schema installed as `share/rz-tracetest/report.schema.json` and lists
+each frame's address, bytes, disassembly, result, instruction ID, and state
+differences. Pass `-x` to enable strict exit codes: `0` for success or an
+explicit skip, `1` for an RzIL or post-state failure, and `2` for an input or
+configuration error. Existing invocations without `-x` retain their historical
+zero exit status for semantic mismatches.
+
 Building with Nix
 -----------------
 
@@ -174,6 +182,13 @@ Works with TCG tracing plugin
 | Hexagon      | Yes                   |
 | PPC          | No - register and endian mismatches |
 | ARM          | No - Cannot trace cpu modes |
+| M68K         | Yes - requires a nonzero M68K frame machine value |
+
+M68K traces are 32-bit and big-endian. Supported frame machine values select
+Rizin CPUs `68000`, `68010`, `68020`, `68030`, `68040`, `68060`, `cfv2`, or
+`cfv4e`. Unknown and unspecified M68K machine values are rejected. QEMU's
+96-bit floating-point register representation is normalized against Rizin's
+80-bit representation with the QEMU alignment padding fixed to zero.
 
 
 ## Troubleshooting

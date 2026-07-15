@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rizin.re/schemas/rz-tracetest-report-v1.json",
+  "title": "rz-tracetest report v1",
+  "type": "object",
+  "required": ["schema", "schema_version", "tool", "frames", "summary"],
+  "properties": {
+    "schema": { "const": "rz-tracetest-report-v1" },
+    "schema_version": { "const": 1 },
+    "tool": { "const": "rz-tracetest" },
+    "trace": { "$ref": "#/$defs/trace" },
+    "frames": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/frame" }
+    },
+    "summary": { "$ref": "#/$defs/summary" },
+    "error": { "$ref": "#/$defs/error" }
+  },
+  "oneOf": [
+    {
+      "required": ["trace"],
+      "not": { "required": ["error"] }
+    },
+    {
+      "required": ["error"],
+      "not": { "required": ["trace"] }
+    }
+  ],
+  "$defs": {
+    "trace": {
+      "type": "object",
+      "required": ["version", "architecture", "machine", "frame_count"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 0 },
+        "architecture": { "type": "integer", "minimum": 0 },
+        "machine": { "type": "integer", "minimum": 0 },
+        "frame_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "difference": {
+      "type": "object",
+      "required": ["name", "expected", "actual"],
+      "properties": {
+        "name": { "type": "string" },
+        "address": { "type": "integer", "minimum": 0 },
+        "expected": { "type": "string" },
+        "actual": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "frame": {
+      "type": "object",
+      "required": [
+        "index",
+        "address",
+        "bytes",
+        "disassembly",
+        "result",
+        "instruction_id",
+        "register_differences",
+        "memory_differences",
+        "details"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "address": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "null" }
+          ]
+        },
+        "bytes": { "type": "string", "pattern": "^(?:[0-9a-fA-F]{2})*$" },
+        "disassembly": { "type": "string" },
+        "result": {
+          "enum": [
+            "success",
+            "skipped",
+            "invalid_op",
+            "invalid_il",
+            "vm_runtime_error",
+            "post_state_mismatch",
+            "unimplemented",
+            "unknown"
+          ]
+        },
+        "instruction_id": { "type": "integer", "minimum": 0 },
+        "register_differences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/difference" }
+        },
+        "memory_differences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/difference" }
+        },
+        "details": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "processed",
+        "success",
+        "skipped",
+        "invalid_op",
+        "invalid_il",
+        "vm_runtime_error",
+        "post_state_mismatch",
+        "unimplemented",
+        "unknown",
+        "unique_instructions",
+        "interrupted"
+      ],
+      "properties": {
+        "processed": { "type": "integer", "minimum": 0 },
+        "success": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "invalid_op": { "type": "integer", "minimum": 0 },
+        "invalid_il": { "type": "integer", "minimum": 0 },
+        "vm_runtime_error": { "type": "integer", "minimum": 0 },
+        "post_state_mismatch": { "type": "integer", "minimum": 0 },
+        "unimplemented": { "type": "integer", "minimum": 0 },
+        "unknown": { "type": "integer", "minimum": 0 },
+        "unique_instructions": { "type": "integer", "minimum": 0 },
+        "interrupted": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": { "const": "input_or_configuration" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

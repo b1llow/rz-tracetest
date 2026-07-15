@@ -5,6 +5,24 @@
 #include "dump.h"
 #include "trace.h"
 
+#include <algorithm>
+
+static std::vector<ut8> TraceMemoryToTarget(const std::string &value, bool big_endian) {
+	std::vector<ut8> result(value.begin(), value.end());
+	if (big_endian) {
+		std::reverse(result.begin(), result.end());
+	}
+	return result;
+}
+
+static std::vector<ut8> TargetMemoryToTrace(const std::vector<ut8> &value, bool big_endian) {
+	std::vector<ut8> result(value);
+	if (big_endian) {
+		std::reverse(result.begin(), result.end());
+	}
+	return result;
+}
+
 RizinEmulator::RizinEmulator(std::unique_ptr<TraceAdapter> adapter_arg)
     : adapter(std::move(adapter_arg)),
       core(rz_core_new(), rz_core_free),
@@ -26,6 +44,10 @@ RizinEmulator::RizinEmulator(std::unique_ptr<TraceAdapter> adapter_arg)
 	int bits = adapter->RizinBits(std::nullopt, adapter->GetMachine());
 	if (bits) {
 		rz_config_set_i(core->config, "asm.bits", bits);
+	}
+	auto halt_on_exceptions = adapter->RizinHaltOnExceptions();
+	if (!halt_on_exceptions.empty()) {
+		rz_config_set(core->config, "rzil.step.events.halt_on_exc", halt_on_exceptions.c_str());
 	}
 	rz_config_set_b(core->config, "cfg.bigendian", adapter->IsBigEndian());
 	reg->big_endian = adapter->IsBigEndian();
@@ -165,9 +187,16 @@ static void print_reg_mismatch_msg(const char *rz_reg, const char *trace_reg, co
 }
 
 FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut64> next_pc, int verbose, bool invalid_op_quiet,
-	std::optional<std::function<bool(const std::string &)>> skip_by_disasm, size_t *tested_insn_id, bool cache_reset) {
+	std::optional<std::function<bool(const std::string &)>> skip_by_disasm, size_t *tested_insn_id,
+	bool cache_reset, FrameReport *report) {
+	if (report) {
+		report->index = index;
+	}
 	if (!f->has_std_frame()) {
 		printf("Non-std frame, can't deal with this (yet)\n");
+		if (report) {
+			report->details.emplace_back("non-standard frame");
+		}
 		return FrameCheckResult::Unimplemented;
 	}
 
@@ -176,6 +205,13 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 	const std_frame &sf = f->std_frame();
 	const uint8_t *code_data = (const uint8_t *)sf.rawbytes().data();
 	const uint32_t code_size = sf.rawbytes().length();
+	if (report) {
+		report->address = sf.address();
+		report->has_address = true;
+		char *hex = rz_hex_bin2strdup(code_data, code_size);
+		report->bytes = hex ? hex : "";
+		rz_mem_free(hex);
+	}
 
 	int need_bits = adapter->RizinBits(sf.has_mode() ? std::make_optional(sf.mode()) : std::nullopt, adapter->GetMachine());
 	if (need_bits && need_bits != rz_asm_get_bits(core->rasm)) {
@@ -196,14 +232,18 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 		RzAsmOp asmop = {};
 		rz_asm_set_pc(core->rasm, sf.address());
 		disasm->failed = !code_size || rz_asm_disassemble(core->rasm, &asmop, code_data, code_size) <= 0;
+		char *hex = rz_hex_bin2strdup(code_data, code_size);
+		disasm->hex_str = hex ? hex : "";
+		rz_mem_free(hex);
 		if (!disasm->failed) {
 			disasm->disasm_str = rz_strbuf_get(&asmop.buf_asm);
-			char *hex = rz_hex_bin2strdup(code_data, code_size);
-			disasm->hex_str = hex;
-			rz_mem_free(hex);
 		}
 		rz_asm_op_fini(&asmop);
 	};
+	if (report) {
+		disassemble();
+		report->disassembly = disasm->failed ? "" : disasm->disasm_str;
+	}
 
 	bool disasm_printed = false;
 	auto print_disasm = [&]() {
@@ -262,6 +302,7 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 	}
 	rz_reg_arena_zero(reg.get(), RZ_REG_TYPE_ANY);
 
+	bool unknown_failure = false;
 	for (const auto &o : sf.operand_pre_list().elem()) {
 		if (o.operand_info_specific().has_reg_operand()) {
 			const auto &ro = o.operand_info_specific().reg_operand();
@@ -282,6 +323,7 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 				}
 				printf("Unknown reg: %s\n", ro.name().c_str());
 				print_disasm();
+				unknown_failure = true;
 				continue;
 			}
 			RzBitVector *bv = rz_bv_new_from_bytes_le((const ut8 *)o.value().data(), 0, RegOperandSizeBits(o));
@@ -290,17 +332,27 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 				print_disasm();
 				printf("Can't apply reg value of %s (%s) because its size (%u) is not equal to the one in RzReg (%u)\n",
 					ro.name().c_str(), rn.c_str(), (unsigned int)rz_bv_len(bv), (unsigned int)ri->size);
+				unknown_failure = true;
+				rz_bv_free(bv);
+				continue;
 			}
 			rz_reg_set_bv(reg.get(), ri, bv);
 			rz_bv_free(bv);
 		} else if (o.operand_info_specific().has_mem_operand()) {
 			const auto &mo = o.operand_info_specific().mem_operand();
-			rz_io_write_at(io, mo.address(), (const ut8 *)o.value().data(), MemOperandSizeBytes(o));
+			std::vector<ut8> target_value = TraceMemoryToTarget(o.value(), adapter->IsBigEndian());
+			rz_io_write_at(io, mo.address(), target_value.data(), target_value.size());
 		} else {
 			print_disasm();
 			printf("No or unknown operand type\n");
-			return FrameCheckResult::Unimplemented;
+			return FrameCheckResult::Unknown;
 		}
+	}
+	if (unknown_failure) {
+		if (report) {
+			report->details.emplace_back("unknown or incompatible pre-state register");
+		}
+		return FrameCheckResult::Unknown;
 	}
 	rz_reg_set_value_by_role(reg.get(), RZ_REG_NAME_PC, sf.address());
 
@@ -337,7 +389,7 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 		rz_strbuf_fini(&sb);
 		printf("Validation failed: %s\n", validate_report);
 		rz_mem_free(validate_report);
-		return FrameCheckResult::InvalidOp;
+		return FrameCheckResult::InvalidIL;
 	}
 
 	//////////////////////////////////////////
@@ -419,6 +471,30 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 		print_disasm();
 		print_exec_info();
 	};
+	auto record_register_difference = [&](const std::string &name,
+						  const std::string &expected, const std::string &actual) {
+		if (!report) {
+			return;
+		}
+		FrameValueDifference difference;
+		difference.name = name;
+		difference.expected = expected;
+		difference.actual = actual;
+		report->register_differences.emplace_back(std::move(difference));
+	};
+	auto record_memory_difference = [&](ut64 address,
+						const std::string &expected, const std::string &actual) {
+		if (!report) {
+			return;
+		}
+		FrameValueDifference difference;
+		difference.name = "memory";
+		difference.address = address;
+		difference.has_address = true;
+		difference.expected = expected;
+		difference.actual = actual;
+		report->memory_differences.emplace_back(std::move(difference));
+	};
 
 	// trace -> vm: check that every post-operand is correctly represented in the vm
 
@@ -442,6 +518,8 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 					mismatched();
 					char *ts = rz_bv_as_hex_string(bv, true);
 					print_reg_mismatch_msg(mismatching_reg, ro.name().c_str(), mismatching_val, ts);
+					record_register_difference(mismatching_reg ? mismatching_reg : ro.name(),
+						ts ? ts : "", mismatching_val ? mismatching_val : "");
 					rz_mem_free(ts);
 					rz_mem_free(mismatching_val);
 					rz_mem_free(mismatching_reg);
@@ -453,6 +531,7 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 			if (!ri) {
 				if (!adapter->IgnoreUnknownReg(ro.name())) {
 					printf("Unknown reg: %s\n", ro.name().c_str());
+					unknown_failure = true;
 				}
 				continue;
 			}
@@ -469,6 +548,7 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 				char *ts = rz_bv_as_hex_string(tbv, true);
 				char *rs = rz_bv_as_hex_string(rbv, true);
 				print_reg_mismatch_msg(ri->name, ro.name().c_str(), rs, ts);
+				record_register_difference(ri->name, ts ? ts : "", rs ? rs : "");
 				rz_mem_free(ts);
 				rz_mem_free(rs);
 			} else {
@@ -486,19 +566,22 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 			ut64 size = MemOperandSizeBytes(o);
 			std::vector<ut8> actual(size);
 			rz_io_read_at_mapped(io, mo.address(), actual.data(), size);
-			if (memcmp(actual.data(), o.value().data(), size)) {
+			std::vector<ut8> expected = TraceMemoryToTarget(o.value(), adapter->IsBigEndian());
+			if (actual != expected) {
 				mismatched();
 				char *ts = rz_hex_bin2strdup((const ut8 *)o.value().data(), size);
-				char *rs = rz_hex_bin2strdup(actual.data(), size);
+				std::vector<ut8> normalized_actual = TargetMemoryToTrace(actual, adapter->IsBigEndian());
+				char *rs = rz_hex_bin2strdup(normalized_actual.data(), size);
 				printf(Color_RED "MISMATCH" Color_RESET " post memory:\n");
 				printf("  expected [0x%04" PFMT64x "] = %s\n", (ut64)mo.address(), ts);
 				printf("  got      [0x%04" PFMT64x "] = %s\n", (ut64)mo.address(), rs);
+				record_memory_difference(mo.address(), ts ? ts : "", rs ? rs : "");
 				rz_mem_free(ts);
 				rz_mem_free(rs);
 			}
 		} else {
 			printf("No or unknown operand type\n");
-			return FrameCheckResult::Unimplemented;
+			return FrameCheckResult::Unknown;
 		}
 	}
 
@@ -510,6 +593,11 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 		printf(Color_RED "MISMATCH" Color_RESET " post program counter:\n");
 		printf("  expected %8s = 0x%" PFMT64x "\n", pc_tracename.c_str(), pc_expect);
 		printf("  got      %8s = 0x%" PFMT64x "\n", pc_ri->name, pc_actual);
+		char expected[32];
+		char actual[32];
+		snprintf(expected, sizeof(expected), "0x%" PFMT64x, pc_expect);
+		snprintf(actual, sizeof(actual), "0x%" PFMT64x, pc_actual);
+		record_register_difference(pc_ri->name, expected, actual);
 	}
 
 	// vm -> trace: try to find a valid explanation (justification) in the trace for every event that happened
@@ -581,6 +669,9 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 
 		if (!justified) {
 			mismatched();
+			if (report) {
+				report->details.emplace_back("unjustified IL event " + std::to_string(evi));
+			}
 			if (!unjustified_printed) {
 				printf(Color_RED "UNJUSTIFIED" Color_RESET " event(s) performed by IL:\n");
 				unjustified_printed = true;
@@ -593,6 +684,12 @@ FrameCheckResult RizinEmulator::RunFrame(ut64 index, frame *f, std::optional<ut6
 
 	if (mismatch) {
 		printf("\n");
+	}
+	if (unknown_failure) {
+		if (report) {
+			report->details.emplace_back("unknown post-state register");
+		}
+		return FrameCheckResult::Unknown;
 	}
 	return mismatch ? FrameCheckResult::PostStateMismatch : FrameCheckResult::Success;
 }
@@ -619,7 +716,7 @@ bool RizinEmulator::TraceRegOverlapsILVar(const char *tracereg, const char *var)
 	if (!ri) {
 		return false;
 	}
-	if (!RegIsBound(vm->reg_binding, var)) {
+	if (!RegIsBound(vm->ctx->reg_binding, var)) {
 		return false;
 	}
 	if (rzreg == var) {

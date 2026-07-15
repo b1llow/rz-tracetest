@@ -5,11 +5,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <rz_types.h>
 #include <rz_util/rz_bitvector.h>
 #include <rz_util/rz_hex.h>
 #include <rz_util/rz_strbuf.h>
+#include <stdexcept>
 #include <vector>
 
 static inline bool IsOneBitFlag(const std::string &tn) {
@@ -48,6 +51,202 @@ bool TraceAdapter::IgnorePCMismatch(ut64 pc_actual, ut64 pc_expect) const {
 
 bool TraceAdapter::AllowNoOperandSameValueAssignment() const {
 	return false;
+}
+
+static uint16_t BitVectorU16(const RzBitVector *value, size_t offset) {
+	uint16_t result = 0;
+	for (size_t i = 0; i < 16; i++) {
+		if (rz_bv_get(value, offset + i)) {
+			result |= static_cast<uint16_t>(1U << i);
+		}
+	}
+	return result;
+}
+
+static void BitVectorSetU16(RzBitVector *value, size_t offset, uint16_t data) {
+	for (size_t i = 0; i < 16; i++) {
+		rz_bv_set(value, offset + i, (data >> i) & 1U);
+	}
+}
+
+static unsigned HighestSetBit(uint64_t value) {
+	unsigned bit = 0;
+	while (value >>= 1U) {
+		bit++;
+	}
+	return bit;
+}
+
+static uint64_t RoundRightEven(uint64_t value, unsigned shift) {
+	if (!shift) {
+		return value;
+	}
+	if (shift > 64) {
+		return 0;
+	}
+	if (shift == 64) {
+		const uint64_t half = UINT64_C(1) << 63;
+		return value > half ? 1 : 0;
+	}
+	const uint64_t quotient = value >> shift;
+	const uint64_t remainder = value & ((UINT64_C(1) << shift) - 1);
+	const uint64_t half = UINT64_C(1) << (shift - 1);
+	return quotient + (remainder > half || (remainder == half && (quotient & 1)));
+}
+
+static RzBitVector *M68KQemuDoubleToRizin(const RzBitVector *qemu_value) {
+	const uint64_t binary = rz_bv_to_ut64(qemu_value);
+	const uint16_t sign = static_cast<uint16_t>(binary >> 63);
+	const uint16_t exponent = static_cast<uint16_t>((binary >> 52) & 0x7ff);
+	const uint64_t fraction = binary & UINT64_C(0x000fffffffffffff);
+	uint16_t signexp = static_cast<uint16_t>(sign << 15);
+	uint64_t significand = 0;
+
+	if (exponent == 0x7ff) {
+		signexp |= 0x7fff;
+		significand = UINT64_C(0x8000000000000000) | (fraction << 11);
+	} else if (exponent) {
+		signexp |= static_cast<uint16_t>(exponent - 1023 + 16383);
+		significand = UINT64_C(0x8000000000000000) | (fraction << 11);
+	} else if (fraction) {
+		const unsigned top = HighestSetBit(fraction);
+		const int unbiased = static_cast<int>(top) - 1074;
+		signexp |= static_cast<uint16_t>(unbiased + 16383);
+		significand = fraction << (63 - top);
+	}
+
+	RzBitVector *rizin_value = rz_bv_new(80);
+	if (!rizin_value) {
+		return nullptr;
+	}
+	rz_bv_set_from_ut64(rizin_value, significand);
+	BitVectorSetU16(rizin_value, 64, signexp);
+	return rizin_value;
+}
+
+static RzBitVector *M68KRizinFloatToQemuDouble(const RzBitVector *rizin_value) {
+	const uint16_t signexp = BitVectorU16(rizin_value, 64);
+	const uint64_t significand = rz_bv_to_ut64(rizin_value);
+	const uint64_t sign = static_cast<uint64_t>(signexp >> 15) << 63;
+	const uint16_t exponent = signexp & 0x7fff;
+	uint64_t binary = sign;
+
+	if (exponent == 0x7fff) {
+		const uint64_t payload = significand & UINT64_C(0x7fffffffffffffff);
+		binary |= UINT64_C(0x7ff0000000000000);
+		if (payload) {
+			uint64_t fraction = payload >> 11;
+			if (!fraction) {
+				fraction = 1;
+			}
+			binary |= fraction;
+		}
+	} else if (significand) {
+		const unsigned top = HighestSetBit(significand);
+		const int base_exponent = (exponent ? static_cast<int>(exponent) - 16383 : 1 - 16383) - 63;
+		int unbiased = base_exponent + static_cast<int>(top);
+		if (unbiased > 1023) {
+			binary |= UINT64_C(0x7ff0000000000000);
+		} else if (unbiased >= -1022) {
+			uint64_t rounded = top > 52
+				? RoundRightEven(significand, top - 52)
+				: significand << (52 - top);
+			if (rounded == (UINT64_C(1) << 53)) {
+				rounded >>= 1;
+				unbiased++;
+			}
+			if (unbiased > 1023) {
+				binary |= UINT64_C(0x7ff0000000000000);
+			} else {
+				binary |= static_cast<uint64_t>(unbiased + 1023) << 52;
+				binary |= rounded & UINT64_C(0x000fffffffffffff);
+			}
+		} else {
+			const int scale = base_exponent + 1074;
+			uint64_t fraction = scale >= 0
+				? significand << static_cast<unsigned>(scale)
+				: RoundRightEven(significand, static_cast<unsigned>(-scale));
+			if (fraction >= (UINT64_C(1) << 52)) {
+				binary |= UINT64_C(1) << 52;
+			} else {
+				binary |= fraction;
+			}
+		}
+	}
+
+	return rz_bv_new_from_ut64(64, binary);
+}
+
+RzBitVector *M68KQemuFloatToRizin(const RzBitVector *qemu_value) {
+	if (!qemu_value) {
+		return nullptr;
+	}
+	if (rz_bv_len(qemu_value) == 64) {
+		return M68KQemuDoubleToRizin(qemu_value);
+	}
+	if (rz_bv_len(qemu_value) != 96) {
+		return nullptr;
+	}
+	RzBitVector *rizin_value = rz_bv_new(80);
+	if (!rizin_value) {
+		return nullptr;
+	}
+	uint64_t significand = rz_bv_to_ut64(qemu_value);
+	const uint16_t signexp = BitVectorU16(qemu_value, 80);
+	// M68K accepts both integer-bit encodings for infinity and QEMU emits
+	// either form depending on the operation. Normalize both to the canonical
+	// IEEE binary80 form used by RzFloat and SoftFloat.
+	if ((signexp & 0x7fff) == 0x7fff && (significand << 1) == 0) {
+		significand = UINT64_C(0x8000000000000000);
+	}
+	rz_bv_set_from_ut64(rizin_value, significand);
+	rz_bv_copy_nbits(rizin_value, 64, qemu_value, 80, 16);
+	return rizin_value;
+}
+
+RzBitVector *M68KRizinFloatToQemu(const RzBitVector *rizin_value, size_t qemu_bits) {
+	if (!rizin_value || rz_bv_len(rizin_value) != 80) {
+		return nullptr;
+	}
+	if (qemu_bits == 64) {
+		return M68KRizinFloatToQemuDouble(rizin_value);
+	}
+	if (qemu_bits != 96) {
+		return nullptr;
+	}
+	RzBitVector *qemu_value = rz_bv_new(96);
+	if (!qemu_value) {
+		return nullptr;
+	}
+	rz_bv_copy_nbits(qemu_value, 0, rizin_value, 0, 64);
+	// Bits 64..79 are QEMU's alignment padding and remain zero.
+	rz_bv_copy_nbits(qemu_value, 80, rizin_value, 64, 16);
+	return qemu_value;
+}
+
+static const RzBitVector *M68KEventFloatBits(const RzILVal *value) {
+	if (!value) {
+		return nullptr;
+	}
+	if (value->type == RZ_IL_TYPE_PURE_BITVECTOR) {
+		return value->data.bv;
+	}
+	if (value->type == RZ_IL_TYPE_PURE_FLOAT && value->data.f) {
+		return value->data.f->s;
+	}
+	return nullptr;
+}
+
+bool M68KRizinFloatsEquivalent(const RzBitVector *expected, const RzBitVector *actual, size_t qemu_bits) {
+	if (!expected || !actual || rz_bv_len(expected) != 80 || rz_bv_len(actual) != 80) {
+		return false;
+	}
+	RzBitVector *expected_qemu = M68KRizinFloatToQemu(expected, qemu_bits);
+	RzBitVector *actual_qemu = M68KRizinFloatToQemu(actual, qemu_bits);
+	const bool equal = expected_qemu && actual_qemu && rz_bv_eq(expected_qemu, actual_qemu);
+	rz_bv_free(actual_qemu);
+	rz_bv_free(expected_qemu);
+	return equal;
 }
 
 class VICETraceAdapter : public TraceAdapter {
@@ -496,6 +695,163 @@ class Sparc64TraceAdapter : public TraceAdapter {
 		}
 };
 
+class M68KTraceAdapter : public TraceAdapter {
+	public:
+		explicit M68KTraceAdapter(size_t machine) {
+			SetMachine(machine);
+			SetIsBigEndian(true);
+			switch (machine) {
+			case frame_mach_m68000:
+				cpu = "68000";
+				break;
+			case frame_mach_m68010:
+				cpu = "68010";
+				break;
+			case frame_mach_m68020:
+				cpu = "68020";
+				break;
+			case frame_mach_m68030:
+				cpu = "68030";
+				break;
+			case frame_mach_m68040:
+				cpu = "68040";
+				break;
+			case frame_mach_m68060:
+				cpu = "68060";
+				break;
+			case frame_mach_mcf_isa_aplus_emac:
+				cpu = "cfv2";
+				break;
+			case frame_mach_mcf_isa_b_float_emac:
+				cpu = "cfv4e";
+				break;
+			default:
+				break;
+			}
+		}
+
+		std::string RizinArch() const override { return "m68k"; }
+
+		std::string RizinCPU() const override { return cpu; }
+
+		std::string RizinHaltOnExceptions() const override { return "none"; }
+
+		int RizinBits(std::optional<std::string> mode, std::optional<uint64_t> machine) const override {
+			return 32;
+		}
+
+		std::string TraceRegToRizin(const std::string &tracereg) const override {
+			if (tracereg == "fp") {
+				return "a6";
+			}
+			if (tracereg == "sp") {
+				return "a7";
+			}
+			if (tracereg == "ps") {
+				return "sr";
+			}
+			if (tracereg == "fpcontrol") {
+				return "fpcr";
+			}
+			if (tracereg == "fpstatus") {
+				return "fpsr";
+			}
+			if (tracereg == "fpiaddr") {
+				return "fpiar";
+			}
+			std::string result = tracereg;
+			std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+			return result;
+		}
+
+		void AdjustRegContentsFromTrace(const std::string &tracename, RzBitVector *trace_val, RzAnalysisOp *op) const override {
+			if (tracename == "ps") {
+				ut16 sr = rz_bv_to_ut16(trace_val);
+				rz_bv_fini(trace_val);
+				rz_bv_init(trace_val, 16);
+				rz_bv_set_from_ut64(trace_val, sr);
+			}
+		}
+
+		bool RegNeedsCustomHandling(const std::string &trace_reg_name) const override {
+			return trace_reg_name.size() == 3 && trace_reg_name[0] == 'f' &&
+				trace_reg_name[1] == 'p' && trace_reg_name[2] >= '0' &&
+				trace_reg_name[2] <= '7';
+		}
+
+		bool AllowNoOperandSameValueAssignment() const override {
+			return true;
+		}
+
+		bool AssumeEventIsJustified(const RzILEvent *event) const override {
+			if (!event || event->type != RZ_IL_EVENT_VAR_WRITE) {
+				return false;
+			}
+			const RzILEventVarWrite &write = event->data.var_write;
+			const char *name = write.variable;
+			if (!name || strlen(name) != 3 || name[0] != 'f' || name[1] != 'p' ||
+				name[2] < '0' || name[2] > '7') {
+				return false;
+			}
+			const RzBitVector *old_bits = M68KEventFloatBits(write.old_value);
+			const RzBitVector *new_bits = M68KEventFloatBits(write.new_value);
+			const size_t qemu_bits = GetMachine() == frame_mach_mcf_isa_b_float_emac ? 64 : 96;
+			return M68KRizinFloatsEquivalent(old_bits, new_bits, qemu_bits);
+		}
+
+		void CustomRegSetup(RzReg *rz_reg, const std::string &trace_reg_name, const RzBitVector *trace_bv) const override {
+			RzRegItem *item = rz_reg_get(rz_reg, trace_reg_name.c_str(), RZ_REG_TYPE_ANY);
+			const size_t trace_bits = trace_bv ? rz_bv_len(trace_bv) : 0;
+			const bool valid_width = trace_bits == 96 ||
+				(trace_bits == 64 && GetMachine() == frame_mach_mcf_isa_b_float_emac);
+			RzBitVector *rizin_value = valid_width ? M68KQemuFloatToRizin(trace_bv) : nullptr;
+			if (!item || !rizin_value) {
+				rz_bv_free(rizin_value);
+				throw std::runtime_error("Invalid M68K floating-point register setup for " + trace_reg_name);
+			}
+			if (!rz_reg_set_bv(rz_reg, item, rizin_value)) {
+				rz_bv_free(rizin_value);
+				throw std::runtime_error("Failed to set M68K floating-point register " + trace_reg_name);
+			}
+			rz_bv_free(rizin_value);
+		}
+
+		bool CustomRegCompare(RzReg *rz_reg, const std::string &trace_reg_name,
+			const RzBitVector *trace_bv, char **mismatch_name,
+			char **mismatch_val) override {
+			RzRegItem *item = rz_reg_get(rz_reg, trace_reg_name.c_str(), RZ_REG_TYPE_ANY);
+			const size_t trace_bits = trace_bv ? rz_bv_len(trace_bv) : 0;
+			const bool valid_width = trace_bits == 96 ||
+				(trace_bits == 64 && GetMachine() == frame_mach_mcf_isa_b_float_emac);
+			RzBitVector *expected_rizin = valid_width ? M68KQemuFloatToRizin(trace_bv) : nullptr;
+			RzBitVector *expected_qemu = M68KRizinFloatToQemu(expected_rizin, trace_bits);
+			RzBitVector *actual_rizin = item ? rz_reg_get_bv(rz_reg, item) : nullptr;
+			RzBitVector *actual_qemu = M68KRizinFloatToQemu(actual_rizin, trace_bits);
+			if (!item || !expected_rizin || !expected_qemu || !actual_rizin || !actual_qemu) {
+				rz_bv_free(actual_qemu);
+				rz_bv_free(actual_rizin);
+				rz_bv_free(expected_qemu);
+				rz_bv_free(expected_rizin);
+				throw std::runtime_error("Invalid M68K floating-point register comparison for " + trace_reg_name);
+			}
+			bool equal = M68KRizinFloatsEquivalent(expected_rizin, actual_rizin, trace_bits);
+			if (!equal) {
+				*mismatch_name = rz_str_dup(item ? item->name : trace_reg_name.c_str());
+				*mismatch_val = actual_qemu
+					? rz_bv_as_hex_string(actual_qemu, true)
+					: rz_str_dup("<unavailable>");
+			}
+			rz_bv_free(actual_qemu);
+			rz_bv_free(actual_rizin);
+			rz_bv_free(expected_qemu);
+			rz_bv_free(expected_rizin);
+			return equal;
+		}
+
+	private:
+		std::string cpu;
+};
+
 class PPCTraceAdapter : public TraceAdapter {
 	public:
 		std::string RizinArch() const override { return "ppc"; }
@@ -809,6 +1165,20 @@ std::unique_ptr<TraceAdapter> SelectTraceAdapter(frame_architecture arch, size_t
 		return std::unique_ptr<TraceAdapter>(new HexagonTraceAdapter());
 	case frame_arch_i386:
 		return std::unique_ptr<TraceAdapter>(new X86TraceAdapter());
+	case frame_arch_m68k:
+		switch (mach) {
+		case frame_mach_m68000:
+		case frame_mach_m68010:
+		case frame_mach_m68020:
+		case frame_mach_m68030:
+		case frame_mach_m68040:
+		case frame_mach_m68060:
+		case frame_mach_mcf_isa_aplus_emac:
+		case frame_mach_mcf_isa_b_float_emac:
+			return std::unique_ptr<TraceAdapter>(new M68KTraceAdapter(mach));
+		default:
+			return nullptr;
+		}
 	case frame_arch_tricore:
 		return std::unique_ptr<TraceAdapter>(new TriCoreTraceAdapter());
 	case frame_arch_sparc: {

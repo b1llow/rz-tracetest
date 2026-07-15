@@ -13,6 +13,8 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 class RizinException : public std::exception {
 	public:
@@ -29,7 +31,7 @@ class RizinException : public std::exception {
 		}
 
 		~RizinException() {
-			delete msg;
+			delete[] msg;
 		}
 
 		const char *what() const noexcept override { return msg; }
@@ -46,9 +48,30 @@ enum class FrameCheckResult {
 	VMRuntimeError,
 	PostStateMismatch,
 	Unimplemented,
-	Unkown
+	Unknown
 };
 #define FRAME_CHECK_RESULT_COUNT 8
+
+struct FrameValueDifference {
+		std::string name;
+		ut64 address = 0;
+		bool has_address = false;
+		std::string expected;
+		std::string actual;
+};
+
+struct FrameReport {
+		ut64 index = 0;
+		ut64 address = 0;
+		bool has_address = false;
+		std::string bytes;
+		std::string disassembly;
+		FrameCheckResult result = FrameCheckResult::Unknown;
+		size_t instruction_id = 0;
+		std::vector<FrameValueDifference> register_differences;
+		std::vector<FrameValueDifference> memory_differences;
+		std::vector<std::string> details;
+};
 
 class RizinEmulator {
 	private:
@@ -64,7 +87,8 @@ class RizinEmulator {
 	public:
 		RizinEmulator(std::unique_ptr<TraceAdapter> adapter);
 		FrameCheckResult RunFrame(ut64 index, frame *f, std::optional<ut64> next_pc, int verbose, bool invalid_op_quiet,
-			std::optional<std::function<bool(const std::string &)>> skip_by_disasm, size_t *tested_insn_id, bool cache_reset=true);
+			std::optional<std::function<bool(const std::string &)>> skip_by_disasm, size_t *tested_insn_id,
+			bool cache_reset = true, FrameReport *report = nullptr);
 		void SetPrettyIL(bool value) {
 			this->prettify_il = value;
 		}
