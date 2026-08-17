@@ -259,7 +259,7 @@ int main(int argc, const char *argv[]) {
 				break;
 			}
 			float done = n ? 100.00f * (float)total / (float)n : 100.0f;
-			printf("\rFrames: %llu Done: %5.2f%%", n, done);
+			printf("\rFrames: %" PFMT64u " Done: %5.2f%%", n, done);
 		}
 		printf("\n");
 
