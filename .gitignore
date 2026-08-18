@@ -1,3 +1,5 @@
 /test
 .cache
 compile_commands.json
+scripts/__pycache__/
+*.pyc
