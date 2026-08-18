@@ -1399,6 +1399,24 @@ def _loader_arguments(initializers: Sequence[tuple[int, bytes]]) -> list[str]:
 
 TERMINAL_NO_POSTSTATE = {"halt", "stop", "lpstop"}
 UNSUPPORTED_CONTROL = {"callm", "rtm"}
+ARCHITECTED_EXCEPTION_NAMES = {
+    "bkpt",
+    "illegal",
+    "trap",
+    "trapv",
+    "rte",
+    "bgnd",
+    "reset",
+}
+# QEMU instruction translations that disagree with the M68000 manuals.
+# Rizin stays on the manuals. These are recorded, not used as an oracle.
+QEMU_MANUAL_GAPS = {
+    "cmp2": (
+        "QEMU's 68020+ translator implements only CHK2. CMP2 "
+        "(extension word bit 11 clear) is raised as illegal instead of "
+        "comparing the register to the bound pair (M68000PRM CMP2)."
+    ),
+}
 
 
 def build_microprogram(case: dict[str, Any], state: State) -> tuple[bytes, list[str], str | None]:
@@ -1406,6 +1424,14 @@ def build_microprogram(case: dict[str, Any], state: State) -> tuple[bytes, list[
         return b"", [], "terminal instruction has no following plugin-visible post-state"
     if case["instruction_name"] in UNSUPPORTED_CONTROL:
         return b"", [], "control-flow fixture is not safely constructible"
+    if case["instruction_name"] in ARCHITECTED_EXCEPTION_NAMES or case[
+        "instruction_name"
+    ].startswith(("trap", "ftrap")):
+        return (
+            b"",
+            [],
+            "architected exception path is not compared (manual exception; harness has no exception hooks)",
+        )
 
     case = {
         **case,
@@ -1727,7 +1753,18 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             or path == "user-privilege"
         )
         relation = record.get("producer_relation", "exact")
-        if not architected and relation != "exact":
+        if name in QEMU_MANUAL_GAPS:
+            record["result"] = "skip"
+            record["skip_class"] = "qemu-incorrect-implementation"
+            record["reason"] = QEMU_MANUAL_GAPS[name]
+        elif architected:
+            record["result"] = "skip"
+            record["skip_class"] = "architected-exception"
+            record["reason"] = (
+                "QEMU took an exception frame; the manuals require that "
+                "path, but this harness does not compare exception frames"
+            )
+        elif relation != "exact":
             record["result"] = "skip"
             record["skip_class"] = "producer-inapplicable"
             record["reason"] = (
@@ -1807,6 +1844,8 @@ FAILURE_CLASS_DESCRIPTIONS = {
     "producer-length-or-control-divergence": "producer and Rizin disagree on instruction length or control target",
     "fpu-flags-or-precision": "FPU value, FPSR flag, or precision mismatch",
     "reference-gap": "RzIL lifter has no implemented semantics for this instruction",
+    "qemu-incorrect-implementation": "QEMU instruction translation disagrees with the M68000 manuals; Rizin is not aligned to QEMU",
+    "architected-exception": "manual requires an exception; this harness does not compare exception frames",
     "rzil-value-mismatch": "integer/address register or memory value mismatch pending manual triage",
 }
 
