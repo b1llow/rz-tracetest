@@ -5,16 +5,20 @@
 #include "report.h"
 #include "rzemu.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cctype>
 #include <regex>
 #include <rz_util/rz_set.h>
+#include <string>
 #include <vector>
 
 static int help(bool verbose) {
-	printf("Usage: rz-tracetest [-dbeurmphivnx] [-J report.json] [-c count] [-o offset] [-s regex] <filename>.frames\n");
+	printf("Usage: rz-tracetest [-dbeurmphivnx] [-J report.json] [-c count] [-C cpu] [-o offset] [-s regex] <filename>.frames\n");
 	if (verbose) {
 		printf(" -c [count]    number of frames to check, default: all\n");
+		printf(" -C [cpu]      m68k Rizin CPU override: 68000, 68010, 68020, 68030, 68040, 68060, cpu32, coldfire, cfv1, cfv2, cfv3, cfv4, cfv4e, cfv5\n");
 		printf(" -d            dump trace as text, but do not run or test anything\n");
 		printf(" -b            Interpret trace from a big endian architecture.\n");
 		printf(" -e            fail early/stop at the first error\n");
@@ -42,6 +46,33 @@ static ut64 ParseU64Option(const char *option, const std::string &value) {
 		throw RizinException("Invalid value for %s: %s", option, value.c_str());
 	}
 	return static_cast<ut64>(parsed);
+}
+
+static std::string Lowercase(const std::string &value) {
+	std::string result = value;
+	std::transform(result.begin(), result.end(), result.begin(),
+		[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return result;
+}
+
+static bool IsValidM68KCPU(const std::string &cpu) {
+	static const std::array<const char *, 14> valid_cpus = {
+		"68000",
+		"68010",
+		"68020",
+		"68030",
+		"68040",
+		"68060",
+		"cpu32",
+		"coldfire",
+		"cfv1",
+		"cfv2",
+		"cfv3",
+		"cfv4",
+		"cfv4e",
+		"cfv5",
+	};
+	return std::find(valid_cpus.begin(), valid_cpus.end(), cpu) != valid_cpus.end();
 }
 
 static int InputError(const std::optional<std::string> &report_path,
@@ -73,13 +104,14 @@ int main(int argc, const char *argv[]) {
 	bool help_requested = false;
 	int verbose = 0;
 	std::optional<std::string> count_arg;
+	std::optional<std::string> cpu_arg;
 	std::optional<std::string> offset_arg;
 	std::optional<std::string> skip_arg;
 	std::optional<std::string> report_path;
 	std::optional<std::string> command_line_error;
 
 	RzGetopt opt;
-	rz_getopt_init(&opt, argc, (const char **)argv, "hc:o:idbvs:eurmpnJ:x");
+	rz_getopt_init(&opt, argc, (const char **)argv, "hc:C:o:idbvs:eurmpnJ:x");
 	int c;
 
 	while ((c = rz_getopt_next(&opt)) != -1) {
@@ -89,6 +121,13 @@ int main(int argc, const char *argv[]) {
 			break;
 		case 'c':
 			count_arg = opt.arg;
+			break;
+		case 'C':
+			if (cpu_arg) {
+				command_line_error = "-C can only be specified once";
+			} else {
+				cpu_arg = opt.arg;
+			}
 			break;
 		case 'o':
 			offset_arg = opt.arg;
@@ -164,6 +203,13 @@ int main(int argc, const char *argv[]) {
 		if (offset_arg) {
 			offset = ParseU64Option("-o", *offset_arg);
 		}
+		std::optional<std::string> cpu_override;
+		if (cpu_arg) {
+			cpu_override = Lowercase(*cpu_arg);
+			if (!IsValidM68KCPU(*cpu_override)) {
+				throw RizinException("Unsupported m68k CPU: %s", cpu_arg->c_str());
+			}
+		}
 		if (dump_only && report_path) {
 			throw RizinException("-J cannot be combined with -d.");
 		}
@@ -185,18 +231,25 @@ int main(int argc, const char *argv[]) {
 		}
 
 		SerializedTrace::TraceContainerReader trace(argv[opt.ind]);
-		TraceReportInfo report_info = {
-			.trace_version = trace.get_trace_version(),
-			.architecture = static_cast<uint64_t>(trace.get_arch()),
-			.machine = trace.get_machine(),
-			.frame_count = trace.get_num_frames(),
-		};
 		auto adapter = SelectTraceAdapter(trace.get_arch(), trace.get_machine());
 		if (!adapter) {
 			throw RizinException("Failed to match frame_architecture %d and machine %llu to TraceAdapter.",
 				(int)trace.get_arch(), (unsigned long long)trace.get_machine());
 		}
 		adapter->SetMachine(trace.get_machine());
+		if (cpu_override) {
+			if (trace.get_arch() != frame_arch_m68k) {
+				throw RizinException("-C can only be used with m68k traces.");
+			}
+			adapter->SetRizinCPUOverride(*cpu_override);
+		}
+		TraceReportInfo report_info = {
+			.trace_version = trace.get_trace_version(),
+			.architecture = static_cast<uint64_t>(trace.get_arch()),
+			.machine = trace.get_machine(),
+			.frame_count = trace.get_num_frames(),
+			.cpu = adapter->RizinCPU(),
+		};
 		if (big_endian) {
 			adapter->SetIsBigEndian(true);
 		}

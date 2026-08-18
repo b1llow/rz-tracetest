@@ -28,11 +28,42 @@ file(READ "${success_report}" contents)
 if(NOT contents MATCHES "\"machine\":4")
   message(FATAL_ERROR "success report has the wrong machine: ${contents}")
 endif()
+if(NOT contents MATCHES "\"cpu\":\"68020\"")
+  message(FATAL_ERROR "success report has the wrong CPU: ${contents}")
+endif()
 if(NOT contents MATCHES "\"result\":\"success\"")
   message(FATAL_ERROR "success report has the wrong result: ${contents}")
 endif()
 if(NOT contents MATCHES "\"success\":1")
   message(FATAL_ERROR "success report has the wrong summary: ${contents}")
+endif()
+
+set(cpu_report "${TEST_DIR}/cli-cpu.json")
+execute_process(
+  COMMAND "${TRACETEST}" -x -C CPU32 -J "${cpu_report}" "${success_trace}"
+  RESULT_VARIABLE result
+  OUTPUT_VARIABLE output
+  ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "CPU override returned ${result}, expected 0\n${output}\n${error}")
+endif()
+file(READ "${cpu_report}" contents)
+if(NOT contents MATCHES "\"cpu\":\"cpu32\"")
+  message(FATAL_ERROR "CPU override report has the wrong CPU: ${contents}")
+endif()
+
+set(invalid_cpu_report "${TEST_DIR}/cli-invalid-cpu.json")
+execute_process(
+  COMMAND "${TRACETEST}" -x -C not-a-cpu -J "${invalid_cpu_report}" "${success_trace}"
+  RESULT_VARIABLE result
+  OUTPUT_VARIABLE output
+  ERROR_VARIABLE error)
+if(NOT result EQUAL 2)
+  message(FATAL_ERROR "invalid CPU returned ${result}, expected 2\n${output}\n${error}")
+endif()
+file(READ "${invalid_cpu_report}" contents)
+if(NOT contents MATCHES "\"kind\":\"input_or_configuration\"")
+  message(FATAL_ERROR "invalid CPU report has the wrong error kind: ${contents}")
 endif()
 
 set(memory_report "${TEST_DIR}/cli-memory.json")
@@ -136,6 +167,8 @@ file(REMOVE
   "${memory_trace}"
   "${success_report}"
   "${memory_report}"
+  "${cpu_report}"
+  "${invalid_cpu_report}"
   "${skip_report}"
   "${failure_report}"
   "${input_report}"

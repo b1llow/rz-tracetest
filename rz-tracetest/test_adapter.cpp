@@ -40,6 +40,7 @@ static void TestMachines() {
 		{ frame_mach_m68030, "68030" },
 		{ frame_mach_m68040, "68040" },
 		{ frame_mach_m68060, "68060" },
+		{ frame_mach_mcf_isa_a, "cfv2" },
 		{ frame_mach_mcf_isa_aplus_emac, "cfv2" },
 		{ frame_mach_mcf_isa_b_float_emac, "cfv4e" },
 	};
@@ -70,6 +71,8 @@ static void TestMachines() {
 	assert(!SelectTraceAdapter(frame_arch_m68k, frame_mach_cpu32));
 
 	auto adapter = SelectTraceAdapter(frame_arch_m68k, frame_mach_m68020);
+	adapter->SetRizinCPUOverride("cpu32");
+	assert(adapter->RizinCPU() == "cpu32");
 	RzBitVector *ps = rz_bv_new_from_ut64(32, 0xabcd1234);
 	adapter->AdjustRegContentsFromTrace("ps", ps);
 	assert(rz_bv_len(ps) == 16);

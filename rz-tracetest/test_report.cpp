@@ -29,6 +29,7 @@ int main() {
 		.architecture = frame_arch_m68k,
 		.machine = frame_mach_m68020,
 		.frame_count = 1,
+		.cpu = "68020",
 	};
 	FrameReport frame;
 	frame.index = 7;
@@ -56,6 +57,7 @@ int main() {
 	std::string json = ReadFile(path);
 	assert(json.find("\"schema_version\":1") != std::string::npos);
 	assert(json.find("\"machine\":4") != std::string::npos);
+	assert(json.find("\"cpu\":\"68020\"") != std::string::npos);
 	assert(json.find("\"index\":7") != std::string::npos);
 	assert(json.find("\"bytes\":\"4e71\"") != std::string::npos);
 	assert(json.find("nop\\nquoted \\\"value\\\"") != std::string::npos);

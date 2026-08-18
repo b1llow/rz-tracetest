@@ -34,7 +34,8 @@
         "version": { "type": "integer", "minimum": 0 },
         "architecture": { "type": "integer", "minimum": 0 },
         "machine": { "type": "integer", "minimum": 0 },
-        "frame_count": { "type": "integer", "minimum": 0 }
+        "frame_count": { "type": "integer", "minimum": 0 },
+        "cpu": { "type": "string" }
       },
       "additionalProperties": false
     },

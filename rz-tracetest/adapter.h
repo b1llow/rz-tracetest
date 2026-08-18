@@ -259,9 +259,15 @@ class TraceAdapter {
 
 		uint64_t GetMachine() const { return this->machine; }
 
+		void SetRizinCPUOverride(const std::string &cpu) { this->rizin_cpu_override = cpu; }
+
+	protected:
+		std::string RizinCPUOverride() const { return this->rizin_cpu_override.value_or(""); }
+
 	private:
 		bool big_endian = false;
 		uint64_t machine = 0;
+		std::optional<std::string> rizin_cpu_override;
 };
 
 RzBitVector *M68KQemuFloatToRizin(const RzBitVector *qemu_value);

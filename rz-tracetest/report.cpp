@@ -107,7 +107,10 @@ void WriteJsonReport(const std::string &path, const TraceReportInfo &trace,
 	out << "\"version\":" << trace.trace_version;
 	out << ",\"architecture\":" << trace.architecture;
 	out << ",\"machine\":" << trace.machine;
-	out << ",\"frame_count\":" << trace.frame_count << "},\"frames\":[";
+	out << ",\"frame_count\":" << trace.frame_count;
+	out << ",\"cpu\":";
+	WriteJsonString(out, trace.cpu);
+	out << "},\"frames\":[";
 	for (size_t i = 0; i < frames.size(); i++) {
 		if (i) {
 			out << ',';

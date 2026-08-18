@@ -68,6 +68,14 @@ explicit skip, `1` for an RzIL or post-state failure, and `2` for an input or
 configuration error. Existing invocations without `-x` retain their historical
 zero exit status for semantic mismatches.
 
+For M68K profile validation, `-C cpu` overrides the Rizin CPU selected from the
+trace's machine field. It accepts every CPU advertised by Rizin's M68K plugin:
+`68000`, `68010`, `68020`, `68030`, `68040`, `68060`, `cpu32`, `coldfire`,
+`cfv1`, `cfv2`, `cfv3`, `cfv4`, `cfv4e`, and `cfv5`. The selected CPU is
+recorded in JSON as `trace.cpu`. An override changes Rizin decoding and lifting,
+not the CPU that produced the trace, so use it only with a matching producer or
+an explicitly documented common instruction subset.
+
 Building with Nix
 -----------------
 
@@ -186,9 +194,11 @@ Works with TCG tracing plugin
 
 M68K traces are 32-bit and big-endian. Supported frame machine values select
 Rizin CPUs `68000`, `68010`, `68020`, `68030`, `68040`, `68060`, `cfv2`, or
-`cfv4e`. Unknown and unspecified M68K machine values are rejected. QEMU's
-96-bit floating-point register representation is normalized against Rizin's
-80-bit representation with the QEMU alignment padding fixed to zero.
+`cfv4e`. QEMU `m5206` and `m5208` select `cfv2`; `cfv4e` and the synthetic
+`any` model select `cfv4e`. Unknown and unspecified M68K machine values are
+rejected. QEMU's 96-bit floating-point register representation is normalized
+against Rizin's 80-bit representation with the QEMU alignment padding fixed
+to zero.
 
 
 ## Troubleshooting

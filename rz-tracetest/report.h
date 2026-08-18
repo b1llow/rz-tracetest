@@ -16,6 +16,7 @@ struct TraceReportInfo {
 		uint64_t architecture = 0;
 		uint64_t machine = 0;
 		uint64_t frame_count = 0;
+		std::string cpu;
 };
 
 const char *FrameCheckResultName(FrameCheckResult result);

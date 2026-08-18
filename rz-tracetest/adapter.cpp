@@ -719,6 +719,7 @@ class M68KTraceAdapter : public TraceAdapter {
 			case frame_mach_m68060:
 				cpu = "68060";
 				break;
+			case frame_mach_mcf_isa_a:
 			case frame_mach_mcf_isa_aplus_emac:
 				cpu = "cfv2";
 				break;
@@ -732,7 +733,10 @@ class M68KTraceAdapter : public TraceAdapter {
 
 		std::string RizinArch() const override { return "m68k"; }
 
-		std::string RizinCPU() const override { return cpu; }
+		std::string RizinCPU() const override {
+			std::string cpu_override = RizinCPUOverride();
+			return cpu_override.empty() ? cpu : cpu_override;
+		}
 
 		std::string RizinHaltOnExceptions() const override { return "none"; }
 
@@ -1173,6 +1177,7 @@ std::unique_ptr<TraceAdapter> SelectTraceAdapter(frame_architecture arch, size_t
 		case frame_mach_m68030:
 		case frame_mach_m68040:
 		case frame_mach_m68060:
+		case frame_mach_mcf_isa_a:
 		case frame_mach_mcf_isa_aplus_emac:
 		case frame_mach_mcf_isa_b_float_emac:
 			return std::unique_ptr<TraceAdapter>(new M68KTraceAdapter(mach));
