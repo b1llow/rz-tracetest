@@ -160,6 +160,14 @@ EA_SPECS: tuple[tuple[str, int, int, bytes], ...] = (
 
 CLASSIC_PROFILES = {"68000", "68010", "68020", "68030", "68040", "68060", "cpu32"}
 INDEXED_FULL_PROFILES = {"68020", "68030", "68040", "68060", "cpu32"}
+FULL_EA_SPEC_NAMES = {
+    "an-index-full",
+    "pc-index-full",
+    "mem-postindex",
+    "mem-preindex",
+    "pc-mem-postindex",
+    "pc-mem-preindex",
+}
 PRIVILEGED_NAMES = {
     "rte",
     "reset",
@@ -564,6 +572,9 @@ def _immediate_bytes(case: dict[str, Any]) -> bytes:
 
 
 def rewrite_ea(case: dict[str, Any], spec: tuple[str, int, int, bytes]) -> str | None:
+    name = case["instruction_name"]
+    if name.startswith(("fdb", "ftrap")) or name in {f"fb{cond}" for cond in FPU_CONDITION_NAMES}:
+        return None
     field = detect_ea_field(case)
     if field is None:
         return None
@@ -604,6 +615,8 @@ def synthesize_ea_variants(cases: Sequence[dict[str, Any]]) -> list[dict[str, An
     existing = {(case["profile"], case["bytes"]) for case in cases}
     for template in templates.values():
         for spec in EA_SPECS:
+            if spec[0] in FULL_EA_SPEC_NAMES and template["profile"] not in INDEXED_FULL_PROFILES:
+                continue
             encoded = rewrite_ea(template, spec)
             if not encoded or (template["profile"], encoded) in existing:
                 continue
@@ -663,6 +676,8 @@ def expand_across_profiles(
         decode_cases(rizin, probes, required=False)
         by_bytes = {probe["bytes"]: probe for probe in probes if "operands" in probe}
         for seed in seeds:
+            if profile not in INDEXED_FULL_PROFILES and _encoding_needs_full_index(seed):
+                continue
             probe = by_bytes.get(seed["bytes"])
             if not probe:
                 continue
@@ -730,10 +745,14 @@ def add_fpu_condition_cross_product(
     if set(fs_templates) != expected_fs_modes:
         raise ValueError(f"FScc template modes changed: {sorted(fs_templates)}")
 
-    fdb_template = min(
-        (case for case in cases if 133 <= case["instruction_id"] <= 164),
-        key=_template_score,
-    )
+    fdb_candidates = [
+        case
+        for case in cases
+        if 133 <= case["instruction_id"] <= 164 and len(case["bytes"]) >= 12
+    ]
+    if not fdb_candidates:
+        raise ValueError("no complete 6-byte FDBCC template")
+    fdb_template = min(fdb_candidates, key=_template_score)
     ftrap_templates: dict[int, dict[str, Any]] = {}
     for case in cases:
         if 241 <= case["instruction_id"] <= 272:
@@ -1652,14 +1671,36 @@ def execute_one(
     return result
 
 
+def _encoding_needs_full_index(case: dict[str, Any]) -> bool:
+    case_id = str(case.get("case_id", ""))
+    signature = str(case.get("address_signature", ""))
+    if any(name in case_id for name in FULL_EA_SPEC_NAMES):
+        return True
+    return any(
+        marker in signature
+        for marker in (
+            "index-full",
+            "memory-postindexed",
+            "memory-preindexed",
+            "pc-memory-postindexed",
+            "pc-memory-preindexed",
+        )
+    )
+
+
+def _case_matches_regex(case: dict[str, Any], pattern: re.Pattern[str]) -> bool:
+    if pattern.search(str(case.get("case_id", ""))):
+        return True
+    name = str(case.get("instruction_name", ""))
+    mnemonic = str(case.get("mnemonic", "")).split(".", 1)[0]
+    return bool(pattern.fullmatch(name) or pattern.fullmatch(mnemonic))
+
+
 def iter_executions(
     manifest: dict[str, Any], case_pattern: re.Pattern[str] | None = None
 ) -> Iterator[tuple[dict[str, Any], State]]:
     for case in manifest["cases"]:
-        if case_pattern and not any(
-            case_pattern.search(str(case.get(key, "")))
-            for key in ("case_id", "instruction_name", "mnemonic")
-        ):
+        if case_pattern and not _case_matches_regex(case, case_pattern):
             continue
         for raw_state in case["paths"]:
             yield case, State(
