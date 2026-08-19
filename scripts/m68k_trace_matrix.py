@@ -1471,6 +1471,12 @@ QEMU_MANUAL_GAPS = {
         "is the other way around: S/U=0 signed, S/U=1 unsigned. Word "
         "operands with the high bit set therefore disagree on acc/MACSR."
     ),
+    "dual_mac": (
+        "QEMU DISAS_INSN(mac) treats dual accumulate as "
+        "(insn&0x30)!=0 && (ext&3)!=0, so register-only MAAAC/MASAC/"
+        "MSAAC/MSSAC become a single MAC. CFPRM EMAC_B encodings are "
+        "register-only: ACCx and ACCw both take the same scaled product."
+    ),
     "tbl": (
         "QEMU target/m68k has no CPU32 TBL interpolation translator. "
         "Rizin follows CPU32RM TBLS/TBLU/TBLSN/TBLUN."
@@ -1484,6 +1490,7 @@ QEMU_MANUAL_GAPS = {
 
 QEMU_FSAVE_UNDEF_PROFILES = {"68020", "68030", "cpu32"}
 MAC_FAMILY = {"mac", "msac", "maaac", "masac", "msaac", "mssac"}
+DUAL_MAC_FAMILY = {"maaac", "masac", "msaac", "mssac"}
 TBL_FAMILY = {"tbls", "tblu", "tblsn", "tblun"}
 FDB_FAMILY = {
     "fdbf",
@@ -1535,6 +1542,8 @@ def _qemu_gap_reason(record: dict[str, Any]) -> str | None:
     profile = str(record.get("profile", ""))
     if name == "cmp2":
         return QEMU_MANUAL_GAPS["cmp2"]
+    if name in DUAL_MAC_FAMILY:
+        return QEMU_MANUAL_GAPS["dual_mac"]
     if name in MAC_FAMILY:
         return QEMU_MANUAL_GAPS["mac"]
     if name in TBL_FAMILY:
@@ -1924,6 +1933,10 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         record["skip_class"] = "producer-inapplicable"
         record["reason"] = gap
     elif fail and gap and (name in FDB_FAMILY or name.startswith("fdb")):
+        record["result"] = "skip"
+        record["skip_class"] = "qemu-incorrect-implementation"
+        record["reason"] = gap
+    elif fail and gap and name in DUAL_MAC_FAMILY:
         record["result"] = "skip"
         record["skip_class"] = "qemu-incorrect-implementation"
         record["reason"] = gap
