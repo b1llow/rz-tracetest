@@ -18,5 +18,6 @@ wrong, we record it here and do **not** change Rizin to match QEMU.
 | MAC `MASK` reset | `mac_mask` is left 0 by CPU reset. | ColdFire reset value is `$FFFFFFFF`; writes force the high 16 bits to 1. | QEMU `cpu.c` has no MASK reset; `to_mask` does `ORI 0xffff0000`. |
 | MAC `MACSR` S/U | `gen_mac_extract_word`: `MACSR_SU` set → signed (`ext16s` / `macmuls`); clear → unsigned. | CFPRM integer mode: `S/U,F/I==00` signed, `==10` unsigned. `S/U=0` is signed. | QEMU `translate.c` `MACSR_SU` polarity. |
 | CPU32 `TBL*` | No translator in `target/m68k`. | CPU32RM interpolates two table entries from Dx (integer:fraction) with optional rounding. | QEMU `translate.c` has no TBL opcode. |
+| `FDBcc` | No coprocessor DBcc translator. `INSN(fscc, f240, ffc0, FPU)` matches `f248` (F-line + register in the low bits), so FDBcc is decoded as FScc. | MC68020 UM 7.2.2.3.2 / 7.4.1: cpDBcc decrements Dn and branches; scanPC for the displacement is the 16-bit displacement word (instruction+4). | QEMU `translate.c` `INSN(fscc, f240, ffc0)`. Do not change QEMU. |
 
 Translator aborts while producing traces (`divs`, some `add`/`fmove`/`fcos`/`wdebug`) are producer crashes, not an oracle for Rizin.
