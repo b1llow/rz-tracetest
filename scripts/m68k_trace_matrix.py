@@ -1458,9 +1458,30 @@ QEMU_MANUAL_GAPS = {
         "(extension word bit 11 clear) is raised as illegal instead of "
         "comparing the register to the bound pair (M68000PRM CMP2)."
     ),
+    "mac": (
+        "QEMU gen_mac_extract_word treats MACSR_SU set as signed "
+        "(ext16s / macmuls) and clear as unsigned. CFPRM integer mode "
+        "is the other way around: S/U=0 signed, S/U=1 unsigned. Word "
+        "operands with the high bit set therefore disagree on acc/MACSR."
+    ),
+    "tbl": (
+        "QEMU target/m68k has no CPU32 TBL interpolation translator. "
+        "Rizin follows CPU32RM TBLS/TBLU/TBLSN/TBLUN."
+    ),
 }
 
 QEMU_FSAVE_UNDEF_PROFILES = {"68020", "68030", "cpu32"}
+MAC_FAMILY = {"mac", "msac", "maaac", "masac", "msaac", "mssac"}
+TBL_FAMILY = {"tbls", "tblu", "tblsn", "tblun"}
+
+
+def _mac_su_mismatch(record: dict[str, Any]) -> bool:
+    if record.get("instruction_name") not in MAC_FAMILY:
+        return False
+    return any(
+        str(diff.get("name", "")).startswith("acc") or diff.get("name") == "macsr"
+        for diff in record.get("register_differences", [])
+    )
 
 
 def _qemu_gap_reason(record: dict[str, Any]) -> str | None:
@@ -1468,6 +1489,10 @@ def _qemu_gap_reason(record: dict[str, Any]) -> str | None:
     profile = str(record.get("profile", ""))
     if name == "cmp2":
         return QEMU_MANUAL_GAPS["cmp2"]
+    if name in MAC_FAMILY:
+        return QEMU_MANUAL_GAPS["mac"]
+    if name in TBL_FAMILY:
+        return QEMU_MANUAL_GAPS["tbl"]
     if name in {"fsave", "frestore"} and profile in QEMU_FSAVE_UNDEF_PROFILES:
         return (
             "QEMU DISAS_INSN(fsave/frestore) only writes a 68040+ idle "
@@ -1846,9 +1871,15 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     frame = record.get("frame_result", "")
     fail = record.get("result") == "fail"
     gap = _qemu_gap_reason(record)
-    if fail and gap and (
-        _is_producer_illegal(record) or _is_truncated_extension_capture(record)
+    if fail and gap and name in TBL_FAMILY:
+        record["result"] = "skip"
+        record["skip_class"] = "producer-inapplicable"
+        record["reason"] = gap
+    elif fail and gap and (
+        _is_producer_illegal(record)
+        or _is_truncated_extension_capture(record)
         or frame in {"unimplemented", "invalid_op"}
+        or _mac_su_mismatch(record)
     ):
         record["result"] = "skip"
         record["skip_class"] = "qemu-incorrect-implementation"
