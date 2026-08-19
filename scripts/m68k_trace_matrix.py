@@ -1475,11 +1475,50 @@ QEMU_MANUAL_GAPS = {
         "QEMU target/m68k has no CPU32 TBL interpolation translator. "
         "Rizin follows CPU32RM TBLS/TBLU/TBLSN/TBLUN."
     ),
+    "fdb": (
+        "QEMU INSN(fscc, f240, ffc0) matches FDBcc encodings such as "
+        "f248, so coprocessor DBcc is translated as FScc. MC68020 UM "
+        "7.2.2.3.2 requires cpDBcc."
+    ),
 }
 
 QEMU_FSAVE_UNDEF_PROFILES = {"68020", "68030", "cpu32"}
 MAC_FAMILY = {"mac", "msac", "maaac", "masac", "msaac", "mssac"}
 TBL_FAMILY = {"tbls", "tblu", "tblsn", "tblun"}
+FDB_FAMILY = {
+    "fdbf",
+    "fdbeq",
+    "fdbogt",
+    "fdboge",
+    "fdbolt",
+    "fdbole",
+    "fdbogl",
+    "fdbor",
+    "fdbun",
+    "fdbueq",
+    "fdbugt",
+    "fdbuge",
+    "fdbult",
+    "fdbule",
+    "fdbne",
+    "fdbt",
+    "fdbsf",
+    "fdbseq",
+    "fdbgt",
+    "fdbge",
+    "fdblt",
+    "fdble",
+    "fdbgl",
+    "fdbgle",
+    "fdbngle",
+    "fdbngl",
+    "fdbnle",
+    "fdbnlt",
+    "fdbnge",
+    "fdbngt",
+    "fdbsne",
+    "fdbst",
+}
 
 
 def _mac_su_mismatch(record: dict[str, Any]) -> bool:
@@ -1500,6 +1539,8 @@ def _qemu_gap_reason(record: dict[str, Any]) -> str | None:
         return QEMU_MANUAL_GAPS["mac"]
     if name in TBL_FAMILY:
         return QEMU_MANUAL_GAPS["tbl"]
+    if name in FDB_FAMILY or name.startswith("fdb"):
+        return QEMU_MANUAL_GAPS["fdb"]
     if name in {"fsave", "frestore"} and profile in QEMU_FSAVE_UNDEF_PROFILES:
         return (
             "QEMU DISAS_INSN(fsave/frestore) only writes a 68040+ idle "
@@ -1881,6 +1922,10 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     if fail and gap and name in TBL_FAMILY:
         record["result"] = "skip"
         record["skip_class"] = "producer-inapplicable"
+        record["reason"] = gap
+    elif fail and gap and (name in FDB_FAMILY or name.startswith("fdb")):
+        record["result"] = "skip"
+        record["skip_class"] = "qemu-incorrect-implementation"
         record["reason"] = gap
     elif fail and gap and (
         _is_producer_illegal(record)
