@@ -1248,8 +1248,13 @@ def _patch_control_displacement(case: dict[str, Any], encoded: bytes) -> bytes:
         name.startswith("b") and integer_condition_suffix(name) is not None
     )
     is_fp_branch = 98 <= int(case["instruction_id"]) <= 129
-    is_db = name.startswith("db") or 133 <= int(case["instruction_id"]) <= 164
+    is_fdb = 133 <= int(case["instruction_id"]) <= 164
+    is_db = name.startswith("db")
+    # Integer DBcc: 2-byte opcode, displacement is relative to PC+2.
+    # FDBcc: F-line + coprocessor word, then a 16-bit displacement relative
+    # to the address after those four bytes (MC68881 UM, FDBcc).
     displacement = TAKEN_ADDRESS - (TARGET_ADDRESS + 2)
+    fdb_displacement = TAKEN_ADDRESS - (TARGET_ADDRESS + 4)
     if is_integer_branch:
         if len(raw) == 2:
             if not -128 <= displacement <= 127 or displacement in {0, -1}:
@@ -1264,6 +1269,8 @@ def _patch_control_displacement(case: dict[str, Any], encoded: bytes) -> bytes:
             raw[-2:] = struct.pack(">h", displacement)
         elif len(raw) == 6:
             raw[-4:] = struct.pack(">i", displacement)
+    elif is_fdb and len(raw) >= 6:
+        raw[-2:] = struct.pack(">h", fdb_displacement)
     elif is_db:
         raw[-2:] = struct.pack(">h", displacement)
     return bytes(raw)
