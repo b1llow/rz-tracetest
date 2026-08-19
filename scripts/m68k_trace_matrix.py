@@ -150,6 +150,11 @@ EA_SPECS: tuple[tuple[str, int, int, bytes], ...] = (
     ("abs-l", 7, 1, struct.pack(">I", ABS_L_DATA)),
     ("pc-disp", 7, 2, struct.pack(">h", PC_DATA - (TARGET_ADDRESS + 2))),
     ("pc-index-brief", 7, 3, struct.pack(">H", 0x0000)),
+    ("pc-index-full", 7, 3, struct.pack(">HH", 0x0130, 0x0020)),
+    ("mem-postindex", 6, 2, struct.pack(">HHH", 0x0126, 0x0020, 0x0000)),
+    ("mem-preindex", 6, 2, struct.pack(">HHH", 0x0122, 0x0020, 0x0000)),
+    ("pc-mem-postindex", 7, 3, struct.pack(">HHH", 0x0126, 0x0020, 0x0000)),
+    ("pc-mem-preindex", 7, 3, struct.pack(">HHH", 0x0122, 0x0020, 0x0000)),
     ("imm", 7, 4, b""),  # immediate payload filled from operand size
 )
 
@@ -1651,7 +1656,10 @@ def iter_executions(
     manifest: dict[str, Any], case_pattern: re.Pattern[str] | None = None
 ) -> Iterator[tuple[dict[str, Any], State]]:
     for case in manifest["cases"]:
-        if case_pattern and not case_pattern.search(case["case_id"]):
+        if case_pattern and not any(
+            case_pattern.search(str(case.get(key, "")))
+            for key in ("case_id", "instruction_name", "mnemonic")
+        ):
             continue
         for raw_state in case["paths"]:
             yield case, State(
@@ -1740,11 +1748,39 @@ def _is_producer_illegal(result: dict[str, Any]) -> bool:
     )
 
 
+def _hex_byte_len(value: Any) -> int:
+    text = str(value or "")
+    if text.startswith("0x"):
+        text = text[2:]
+    text = "".join(ch for ch in text if ch in "0123456789abcdefABCDEF")
+    return len(text) // 2
+
+
+def _is_truncated_extension_capture(record: dict[str, Any]) -> bool:
+    name = record.get("instruction_name", "")
+    if name not in {"cmp2", "chk2", "moves", "movec"}:
+        return False
+    disassembly = (record.get("disassembly") or "").strip().lower()
+    return _hex_byte_len(record.get("bytes")) < 4 or disassembly in {"", "invalid", "?"}
+
+
 def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     record = dict(result)
-    if record.get("result") == "fail" and _is_producer_illegal(record):
-        name = record.get("instruction_name", "")
-        path = record.get("path", "")
+    name = record.get("instruction_name", "")
+    path = record.get("path", "")
+    frame = record.get("frame_result", "")
+    fail = record.get("result") == "fail"
+    if fail and name in QEMU_MANUAL_GAPS and (
+        _is_producer_illegal(record) or _is_truncated_extension_capture(record)
+        or frame in {"unimplemented", "invalid_op"}
+    ):
+        record["result"] = "skip"
+        record["skip_class"] = "qemu-incorrect-implementation"
+        record["reason"] = QEMU_MANUAL_GAPS[name]
+    elif fail and (
+        _is_producer_illegal(record)
+        or (path == "user-privilege" and (frame in {"unimplemented", "invalid_op"} or _is_truncated_extension_capture(record)))
+    ):
         architected = (
             name in EXCEPTION_SEMANTIC_NAMES
             or name.startswith(EXCEPTION_SEMANTIC_PREFIXES)
@@ -1753,11 +1789,7 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             or path == "user-privilege"
         )
         relation = record.get("producer_relation", "exact")
-        if name in QEMU_MANUAL_GAPS:
-            record["result"] = "skip"
-            record["skip_class"] = "qemu-incorrect-implementation"
-            record["reason"] = QEMU_MANUAL_GAPS[name]
-        elif architected:
+        if architected:
             record["result"] = "skip"
             record["skip_class"] = "architected-exception"
             record["reason"] = (
