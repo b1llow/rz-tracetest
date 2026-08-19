@@ -385,6 +385,8 @@ def parse_asm_database(asm_dir: Path, names: Sequence[str]) -> list[dict[str, An
             origin = 0
             if len(fields) > 3 and re.fullmatch(r"0x[0-9a-fA-F]+", fields[3]):
                 origin = int(fields[3], 16)
+            if name in {"pack", "unpk"} and len(encoded) < 8:
+                encoded = encoded + "00" * ((8 - len(encoded)) // 2)
             cases.append(
                 {
                     "case_id": f"asm:{source_profile}:{line_number}",
@@ -598,6 +600,8 @@ def rewrite_ea(case: dict[str, Any], spec: tuple[str, int, int, bytes]) -> str |
     if kept > 2:
         rebuilt.extend(raw[2:kept])
     rebuilt.extend(extension)
+    if case["instruction_name"] in {"pack", "unpk"} and len(rebuilt) < 4:
+        rebuilt.extend(b"\x00" * (4 - len(rebuilt)))
     return rebuilt.hex()
 
 
@@ -1209,6 +1213,20 @@ def _setup_bytes(state: State, case: dict[str, Any]) -> tuple[bytes, dict[str, i
     code.extend(_encode_movea_immediate(7, STACK_ADDRESS))
     code.extend(struct.pack(">HH", 0x46FC, sr | (state.ccr & 0x1F)))
 
+    if case["instruction_name"] in {
+        "mac",
+        "msac",
+        "maaac",
+        "masac",
+        "msaac",
+        "mssac",
+        "movclr",
+    }:
+        # QEMU leaves MASK at 0 after reset; the ColdFire manuals reset it to
+        # all ones. Set both MACSR and MASK in the fixture so the producer
+        # starts from the documented values without changing QEMU translation.
+        code.extend(struct.pack(">HI", 0xA93C, 0))  # move.l #0, MACSR
+        code.extend(struct.pack(">HI", 0xAD3C, 0xFFFFFFFF))  # move.l #-1, MASK
     uses_fpu = case["instruction_name"].startswith("f") and case["instruction_name"] != "ff1"
     if uses_fpu:
         for fp_register in range(8):
@@ -1441,6 +1459,22 @@ QEMU_MANUAL_GAPS = {
         "comparing the register to the bound pair (M68000PRM CMP2)."
     ),
 }
+
+QEMU_FSAVE_UNDEF_PROFILES = {"68020", "68030", "cpu32"}
+
+
+def _qemu_gap_reason(record: dict[str, Any]) -> str | None:
+    name = record.get("instruction_name", "")
+    profile = str(record.get("profile", ""))
+    if name == "cmp2":
+        return QEMU_MANUAL_GAPS["cmp2"]
+    if name in {"fsave", "frestore"} and profile in QEMU_FSAVE_UNDEF_PROFILES:
+        return (
+            "QEMU DISAS_INSN(fsave/frestore) only writes a 68040+ idle "
+            "longword 0x41000000; 68020/68030 take disas_undef. The manuals "
+            "require 68881/68882 idle and busy frames."
+        )
+    return None
 
 
 def build_microprogram(case: dict[str, Any], state: State) -> tuple[bytes, list[str], str | None]:
@@ -1811,13 +1845,14 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     path = record.get("path", "")
     frame = record.get("frame_result", "")
     fail = record.get("result") == "fail"
-    if fail and name in QEMU_MANUAL_GAPS and (
+    gap = _qemu_gap_reason(record)
+    if fail and gap and (
         _is_producer_illegal(record) or _is_truncated_extension_capture(record)
         or frame in {"unimplemented", "invalid_op"}
     ):
         record["result"] = "skip"
         record["skip_class"] = "qemu-incorrect-implementation"
-        record["reason"] = QEMU_MANUAL_GAPS[name]
+        record["reason"] = gap
     elif fail and (
         _is_producer_illegal(record)
         or (path == "user-privilege" and (frame in {"unimplemented", "invalid_op"} or _is_truncated_extension_capture(record)))
