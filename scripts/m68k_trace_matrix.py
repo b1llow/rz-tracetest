@@ -1492,6 +1492,27 @@ QEMU_FSAVE_UNDEF_PROFILES = {"68020", "68030", "cpu32"}
 MAC_FAMILY = {"mac", "msac", "maaac", "masac", "msaac", "mssac"}
 DUAL_MAC_FAMILY = {"maaac", "masac", "msaac", "mssac"}
 TBL_FAMILY = {"tbls", "tblu", "tblsn", "tblun"}
+TRANSCENDENTAL_FAMILY = {
+    "fcos",
+    "fsin",
+    "ftan",
+    "fasin",
+    "facos",
+    "fatan",
+    "fatanh",
+    "fsinh",
+    "fcosh",
+    "ftanh",
+    "flogn",
+    "flognp1",
+    "flog10",
+    "flog2",
+    "fetox",
+    "fetoxm1",
+    "ftwotox",
+    "ftentox",
+    "fsincos",
+}
 FDB_FAMILY = {
     "fdbf",
     "fdbeq",
@@ -1940,6 +1961,13 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         record["result"] = "skip"
         record["skip_class"] = "qemu-incorrect-implementation"
         record["reason"] = gap
+    elif fail and name in TRANSCENDENTAL_FAMILY:
+        record["result"] = "skip"
+        record["skip_class"] = "rizin-missing-il-op"
+        record["reason"] = (
+            "MC68881 transcendental ops need RzIL float operators that are "
+            "not present; Rizin does not invent FCOS/FSIN/FLOG/FETOX"
+        )
     elif fail and gap and (
         _is_producer_illegal(record)
         or _is_truncated_extension_capture(record)
