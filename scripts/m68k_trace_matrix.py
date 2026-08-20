@@ -364,7 +364,9 @@ def parse_asm_database(asm_dir: Path, names: Sequence[str]) -> list[dict[str, An
         profile = "68040" if source_profile == "default" else source_profile
         if profile not in PROFILES:
             raise ValueError(f"unknown Rizin M68K profile in {source}")
-        for line_number, line in enumerate(source.read_text(errors="replace").splitlines(), 1):
+        for line_number, line in enumerate(
+            source.read_text(errors="replace").splitlines(), 1
+        ):
             if not line.startswith("d "):
                 continue
             try:
@@ -381,7 +383,9 @@ def parse_asm_database(asm_dir: Path, names: Sequence[str]) -> list[dict[str, An
                 continue
             instruction_id = name_to_id.get(name)
             if instruction_id is None:
-                raise ValueError(f"unknown instruction {name!r} at {source}:{line_number}")
+                raise ValueError(
+                    f"unknown instruction {name!r} at {source}:{line_number}"
+                )
             origin = 0
             if len(fields) > 3 and re.fullmatch(r"0x[0-9a-fA-F]+", fields[3]):
                 origin = int(fields[3], 16)
@@ -409,7 +413,15 @@ def parse_asm_database(asm_dir: Path, names: Sequence[str]) -> list[dict[str, An
 
 def _run_rizin(rizin: Path, profile: str, commands: Sequence[str]) -> str:
     proc = subprocess.run(
-        [str(rizin), "-q", "-a", "m68k", "-b", "32", f"malloc://{PROGRAM_LIMIT + 65536}"],
+        [
+            str(rizin),
+            "-q",
+            "-a",
+            "m68k",
+            "-b",
+            "32",
+            f"malloc://{PROGRAM_LIMIT + 65536}",
+        ],
         input="\n".join(commands) + "\n",
         text=True,
         capture_output=True,
@@ -445,7 +457,9 @@ def _decode_batch(rizin: Path, profile: str, batch: Sequence[dict[str, Any]]) ->
             id_line = next(lines).strip()
             opex_line = next(lines).strip()
         except StopIteration as error:
-            raise RuntimeError(f"truncated Rizin decoder output for {profile}") from error
+            raise RuntimeError(
+                f"truncated Rizin decoder output for {profile}"
+            ) from error
         case = batch[index]
         if not id_line.isdigit():
             case["decode_error"] = "instruction did not decode"
@@ -458,7 +472,9 @@ def _decode_batch(rizin: Path, profile: str, batch: Sequence[dict[str, Any]]) ->
         try:
             opex = json.loads(opex_line)
         except json.JSONDecodeError as error:
-            raise RuntimeError(f"invalid opex for {case.get('case_id')}: {opex_line!r}") from error
+            raise RuntimeError(
+                f"invalid opex for {case.get('case_id')}: {opex_line!r}"
+            ) from error
         case["instruction_id"] = decoded_id
         case["operands"] = opex.get("operands", [])
         case["address_signature"] = address_signature(case["operands"])
@@ -472,7 +488,9 @@ def _decode_batch(rizin: Path, profile: str, batch: Sequence[dict[str, Any]]) ->
             )
 
 
-def decode_cases(rizin: Path, cases: Sequence[dict[str, Any]], required: bool = True) -> None:
+def decode_cases(
+    rizin: Path, cases: Sequence[dict[str, Any]], required: bool = True
+) -> None:
     """Populate exact Capstone/Rizin operand metadata in-place."""
     by_profile: dict[str, list[dict[str, Any]]] = {profile: [] for profile in PROFILES}
     for case in cases:
@@ -494,8 +512,16 @@ def address_signature(operands: Sequence[dict[str, Any]]) -> str:
         details = [operand_type, ADDRESS_MODE_NAMES.get(mode, f"mode-{mode}")]
         if operand.get("bitfield"):
             details.append("bitfield")
-            details.append("dynamic-offset" if int(operand.get("offset", 0)) & 0x80 else "static-offset")
-            details.append("dynamic-width" if int(operand.get("width", 0)) & 0x80 else "static-width")
+            details.append(
+                "dynamic-offset"
+                if int(operand.get("offset", 0)) & 0x80
+                else "static-offset"
+            )
+            details.append(
+                "dynamic-width"
+                if int(operand.get("width", 0)) & 0x80
+                else "static-width"
+            )
         if operand_type == "reg_pair":
             details.append("pair")
         if operand_type == "reg_bits":
@@ -575,7 +601,9 @@ def _immediate_bytes(case: dict[str, Any]) -> bytes:
 
 def rewrite_ea(case: dict[str, Any], spec: tuple[str, int, int, bytes]) -> str | None:
     name = case["instruction_name"]
-    if name.startswith(("fdb", "ftrap")) or name in {f"fb{cond}" for cond in FPU_CONDITION_NAMES}:
+    if name.startswith(("fdb", "ftrap")) or name in {
+        f"fb{cond}" for cond in FPU_CONDITION_NAMES
+    }:
         return None
     field = detect_ea_field(case)
     if field is None:
@@ -594,7 +622,9 @@ def rewrite_ea(case: dict[str, Any], spec: tuple[str, int, int, bytes]) -> str |
     kept = 2
     if len(raw) >= 4 and (raw[0] & 0xF0) == 0xF0:
         kept = 4
-    elif case["instruction_name"].startswith(("bf", "cas", "chk2", "cmp2", "pack", "unpk")):
+    elif case["instruction_name"].startswith(
+        ("bf", "cas", "chk2", "cmp2", "pack", "unpk")
+    ):
         kept = min(4, len(raw))
     rebuilt = bytearray(opcode.to_bytes(2, "big"))
     if kept > 2:
@@ -619,7 +649,10 @@ def synthesize_ea_variants(cases: Sequence[dict[str, Any]]) -> list[dict[str, An
     existing = {(case["profile"], case["bytes"]) for case in cases}
     for template in templates.values():
         for spec in EA_SPECS:
-            if spec[0] in FULL_EA_SPEC_NAMES and template["profile"] not in INDEXED_FULL_PROFILES:
+            if (
+                spec[0] in FULL_EA_SPEC_NAMES
+                and template["profile"] not in INDEXED_FULL_PROFILES
+            ):
                 continue
             encoded = rewrite_ea(template, spec)
             if not encoded or (template["profile"], encoded) in existing:
@@ -664,7 +697,10 @@ def expand_across_profiles(
         unique.setdefault(key, case)
     seeds = list(unique.values())
     expanded: list[dict[str, Any]] = []
-    print(f"crossing {len(seeds)} encodings across {len(PROFILES)} profiles", file=sys.stderr)
+    print(
+        f"crossing {len(seeds)} encodings across {len(PROFILES)} profiles",
+        file=sys.stderr,
+    )
     for profile in PROFILES:
         probes = []
         for seed in seeds:
@@ -680,13 +716,19 @@ def expand_across_profiles(
         decode_cases(rizin, probes, required=False)
         by_bytes = {probe["bytes"]: probe for probe in probes if "operands" in probe}
         for seed in seeds:
-            if profile not in INDEXED_FULL_PROFILES and _encoding_needs_full_index(seed):
+            if profile not in INDEXED_FULL_PROFILES and _encoding_needs_full_index(
+                seed
+            ):
                 continue
             probe = by_bytes.get(seed["bytes"])
             if not probe:
                 continue
             clone = {
-                **{k: v for k, v in seed.items() if k not in {"operands", "address_signature"}},
+                **{
+                    k: v
+                    for k, v in seed.items()
+                    if k not in {"operands", "address_signature"}
+                },
                 "case_id": f"{seed['case_id']}@{profile}",
                 "profile": profile,
                 "source_profile": seed.get("source_profile", seed["profile"]),
@@ -767,7 +809,11 @@ def add_fpu_condition_cross_product(
         raise ValueError(f"FTRAPcc template sizes changed: {sorted(ftrap_templates)}")
 
     families: list[tuple[str, Iterable[tuple[str, dict[str, Any]]], str]] = [
-        ("fs", ((f"mode-{mode}", case) for mode, case in sorted(fs_templates.items())), "fs"),
+        (
+            "fs",
+            ((f"mode-{mode}", case) for mode, case in sorted(fs_templates.items())),
+            "fs",
+        ),
         ("fdb", (("word-branch", fdb_template),), "fdb"),
         (
             "ftrap",
@@ -788,7 +834,11 @@ def add_fpu_condition_cross_product(
                 existing.add(key)
                 generated.append(
                     {
-                        **{k: v for k, v in template.items() if k not in {"operands", "address_signature"}},
+                        **{
+                            k: v
+                            for k, v in template.items()
+                            if k not in {"operands", "address_signature"}
+                        },
                         "case_id": f"generated:{family}:{suffix}:{template_name}",
                         "source_kind": "generated-fpu-condition-cross-product",
                         "source": None,
@@ -814,10 +864,32 @@ def integer_condition_suffix(name: str) -> str | None:
             if suffix == "ra":
                 return "f"
             return suffix if suffix in INTEGER_CONDITIONS else None
-    if name.startswith("b") and name not in {"bra", "bsr", "bkpt", "bgnd", "bchg", "bclr", "bset", "btst", "bitrev", "byterev"}:
+    if name.startswith("b") and name not in {
+        "bra",
+        "bsr",
+        "bkpt",
+        "bgnd",
+        "bchg",
+        "bclr",
+        "bset",
+        "btst",
+        "bitrev",
+        "byterev",
+    }:
         suffix = name[1:]
         return suffix if suffix in INTEGER_CONDITIONS else None
-    if name.startswith("s") and name not in {"stop", "sub", "suba", "subi", "subq", "subx", "swap", "sats", "sbcd", "strldsr"}:
+    if name.startswith("s") and name not in {
+        "stop",
+        "sub",
+        "suba",
+        "subi",
+        "subq",
+        "subx",
+        "swap",
+        "sats",
+        "sbcd",
+        "strldsr",
+    }:
         suffix = name[1:]
         return suffix if suffix in INTEGER_CONDITIONS else None
     return None
@@ -902,7 +974,9 @@ def fpu_condition_states(case: dict[str, Any]) -> tuple[State | None, State | No
             true_fpsr = fpsr
         if not eval_fpu_condition(index, fpsr) and false_fpsr is None:
             false_fpsr = fpsr
-    make = lambda label, value: dataclasses.replace(DEFAULT_STATE, name=label, fpsr=value)
+    make = lambda label, value: dataclasses.replace(
+        DEFAULT_STATE, name=label, fpsr=value
+    )
     return (
         make("fp-condition-true", true_fpsr) if true_fpsr is not None else None,
         make("fp-condition-false", false_fpsr) if false_fpsr is not None else None,
@@ -921,8 +995,16 @@ def path_states(case: dict[str, Any]) -> list[State]:
         if false_state:
             states.extend(
                 [
-                    dataclasses.replace(false_state, name="condition-false-counter-taken", dregs=(2,) * 8),
-                    dataclasses.replace(false_state, name="condition-false-counter-exhausted", dregs=(0,) * 8),
+                    dataclasses.replace(
+                        false_state,
+                        name="condition-false-counter-taken",
+                        dregs=(2,) * 8,
+                    ),
+                    dataclasses.replace(
+                        false_state,
+                        name="condition-false-counter-exhausted",
+                        dregs=(0,) * 8,
+                    ),
                 ]
             )
         return states
@@ -933,8 +1015,16 @@ def path_states(case: dict[str, Any]) -> list[State]:
         if fp_false:
             states.extend(
                 [
-                    dataclasses.replace(fp_false, name="fp-condition-false-counter-taken", dregs=(2,) * 8),
-                    dataclasses.replace(fp_false, name="fp-condition-false-counter-exhausted", dregs=(0,) * 8),
+                    dataclasses.replace(
+                        fp_false,
+                        name="fp-condition-false-counter-taken",
+                        dregs=(2,) * 8,
+                    ),
+                    dataclasses.replace(
+                        fp_false,
+                        name="fp-condition-false-counter-exhausted",
+                        dregs=(0,) * 8,
+                    ),
                 ]
             )
         return states
@@ -944,7 +1034,13 @@ def path_states(case: dict[str, Any]) -> list[State]:
         return [state for state in (fp_true, fp_false) if state]
 
     if name in {"addx", "subx", "negx"}:
-        return [ZERO_STATE, ONE_STATE, CARRY_STATE, MAX_STATE, dataclasses.replace(ZERO_STATE, name="sticky-z-clear", ccr=0)]
+        return [
+            ZERO_STATE,
+            ONE_STATE,
+            CARRY_STATE,
+            MAX_STATE,
+            dataclasses.replace(ZERO_STATE, name="sticky-z-clear", ccr=0),
+        ]
     if name in {"abcd", "sbcd", "nbcd"}:
         return [
             State("bcd-zero", (0,) * 8, memory=0),
@@ -965,7 +1061,22 @@ def path_states(case: dict[str, Any]) -> list[State]:
             State("unpk-99", (0x99,) * 8, memory=0x99),
             State("unpk-00", (0,) * 8, memory=0),
         ]
-    if name in {"add", "adda", "addi", "addq", "sub", "suba", "subi", "subq", "cmp", "cmpa", "cmpi", "cmpm", "cmp2", "neg"}:
+    if name in {
+        "add",
+        "adda",
+        "addi",
+        "addq",
+        "sub",
+        "suba",
+        "subi",
+        "subq",
+        "cmp",
+        "cmpa",
+        "cmpi",
+        "cmpm",
+        "cmp2",
+        "neg",
+    }:
         return [ZERO_STATE, ONE_STATE, NEGATIVE_STATE, CARRY_STATE, OVERFLOW_STATE]
     if name in {"asl", "asr", "lsl", "lsr", "rol", "ror", "roxl", "roxr"}:
         states = []
@@ -978,7 +1089,11 @@ def path_states(case: dict[str, Any]) -> list[State]:
             DEFAULT_STATE,
             State("divide-by-zero", (0,) * 8, memory=0),
             State("quotient-overflow", (0x80000000,) * 8, memory=1),
-            State("signed-min-over-minus-one", (0x80000000, 0xFFFFFFFF) + (1,) * 6, memory=0xFFFFFFFF),
+            State(
+                "signed-min-over-minus-one",
+                (0x80000000, 0xFFFFFFFF) + (1,) * 6,
+                memory=0xFFFFFFFF,
+            ),
         ]
     if name in {"cas", "cas2"}:
         return [
@@ -988,14 +1103,34 @@ def path_states(case: dict[str, Any]) -> list[State]:
         ]
     if name in {"chk", "chk2"}:
         return [ZERO_STATE, DEFAULT_STATE, NEGATIVE_STATE, MAX_STATE]
-    if name in {"bchg", "bclr", "bset", "btst", "bfchg", "bfclr", "bfexts", "bfextu", "bfffo", "bfins", "bfset", "bftst", "bitrev"}:
+    if name in {
+        "bchg",
+        "bclr",
+        "bset",
+        "btst",
+        "bfchg",
+        "bfclr",
+        "bfexts",
+        "bfextu",
+        "bfffo",
+        "bfins",
+        "bfset",
+        "bftst",
+        "bitrev",
+    }:
         return [ZERO_STATE, ONE_STATE, MAX_STATE]
     if 89 <= int(case["instruction_id"]) <= 274:
         return [
-            dataclasses.replace(DEFAULT_STATE, name="fp-positive", fp_single=0x3F800000),
+            dataclasses.replace(
+                DEFAULT_STATE, name="fp-positive", fp_single=0x3F800000
+            ),
             dataclasses.replace(ZERO_STATE, name="fp-zero", fp_single=0),
-            dataclasses.replace(NEGATIVE_STATE, name="fp-negative", fp_single=0xBF800000),
-            dataclasses.replace(DEFAULT_STATE, name="fp-infinity", fp_single=0x7F800000),
+            dataclasses.replace(
+                NEGATIVE_STATE, name="fp-negative", fp_single=0xBF800000
+            ),
+            dataclasses.replace(
+                DEFAULT_STATE, name="fp-infinity", fp_single=0x7F800000
+            ),
             dataclasses.replace(DEFAULT_STATE, name="fp-nan", fp_single=0x7FC00000),
         ]
     states = [DEFAULT_STATE]
@@ -1008,7 +1143,15 @@ def _is_privileged(case: dict[str, Any]) -> bool:
     if case["instruction_name"] in PRIVILEGED_NAMES:
         return True
     for operand in case.get("operands", []):
-        if str(operand.get("reg", "")).lower() in {"sr", "usp", "msp", "isp", "vbr", "sfc", "dfc"}:
+        if str(operand.get("reg", "")).lower() in {
+            "sr",
+            "usp",
+            "msp",
+            "isp",
+            "vbr",
+            "sfc",
+            "dfc",
+        }:
             return True
     return False
 
@@ -1049,7 +1192,9 @@ def build_manifest(rizin_source: Path, rizin: Path) -> dict[str, Any]:
         states = path_states(case)
         case["paths"] = [state.to_json() for state in states]
         case["planned_executions"] = len(states)
-        case["lifter"] = "implemented" if case["instruction_name"] in lifted else "unimplemented"
+        case["lifter"] = (
+            "implemented" if case["instruction_name"] in lifted else "unimplemented"
+        )
         planned += len(states)
 
     normalized_variants = {
@@ -1063,7 +1208,9 @@ def build_manifest(rizin_source: Path, rizin: Path) -> dict[str, Any]:
     }
     source_counts: dict[str, int] = {}
     for case in cases:
-        source_counts[case["source_kind"]] = source_counts.get(case["source_kind"], 0) + 1
+        source_counts[case["source_kind"]] = (
+            source_counts.get(case["source_kind"], 0) + 1
+        )
     return {
         "schema": SCHEMA,
         "generated_at": utc_now(),
@@ -1081,7 +1228,9 @@ def build_manifest(rizin_source: Path, rizin: Path) -> dict[str, Any]:
         "denominator": {
             "seed_encodings": len(seed_cases),
             "encoding_cases": len(cases),
-            "normalized_profile_id_variant_address_combinations": len(normalized_variants),
+            "normalized_profile_id_variant_address_combinations": len(
+                normalized_variants
+            ),
             "planned_path_executions": planned,
             "source_counts": source_counts,
         },
@@ -1140,7 +1289,9 @@ def relocate_encoding(case: dict[str, Any], encoded: bytes) -> bytes:
     return bytes(raw)
 
 
-def _set_index_register(dregs: list[int], aregs: dict[str, int], name: str | None, value: int) -> None:
+def _set_index_register(
+    dregs: list[int], aregs: dict[str, int], name: str | None, value: int
+) -> None:
     if not name:
         return
     if name.startswith("d") and name[1:].isdigit():
@@ -1202,14 +1353,18 @@ def _default_aregs() -> dict[str, int]:
     return address_registers
 
 
-def _setup_bytes(state: State, case: dict[str, Any]) -> tuple[bytes, dict[str, int], State]:
+def _setup_bytes(
+    state: State, case: dict[str, Any]
+) -> tuple[bytes, dict[str, int], State]:
     address_registers, adjusted = _choose_aregs(case, state)
     sr = 0x0000 if state.name == "user-privilege" else 0x2700
     code = bytearray()
     for register, value in enumerate(adjusted.dregs):
         code.extend(_encode_move_immediate_dreg(register, value))
     for register in range(7):
-        code.extend(_encode_movea_immediate(register, address_registers[f"a{register}"]))
+        code.extend(
+            _encode_movea_immediate(register, address_registers[f"a{register}"])
+        )
     code.extend(_encode_movea_immediate(7, STACK_ADDRESS))
     code.extend(struct.pack(">HH", 0x46FC, sr | (state.ccr & 0x1F)))
 
@@ -1227,7 +1382,9 @@ def _setup_bytes(state: State, case: dict[str, Any]) -> tuple[bytes, dict[str, i
         # starts from the documented values without changing QEMU translation.
         code.extend(struct.pack(">HI", 0xA93C, 0))  # move.l #0, MACSR
         code.extend(struct.pack(">HI", 0xAD3C, 0xFFFFFFFF))  # move.l #-1, MASK
-    uses_fpu = case["instruction_name"].startswith("f") and case["instruction_name"] != "ff1"
+    uses_fpu = (
+        case["instruction_name"].startswith("f") and case["instruction_name"] != "ff1"
+    )
     if uses_fpu:
         for fp_register in range(8):
             extension = 0x4400 | (fp_register << 7)
@@ -1351,9 +1508,13 @@ def _effective_memory(
     elif mode == 11:
         address = TARGET_ADDRESS + _ea_extension_offset_bytes(case, operand) + disp
     elif mode == 12:
-        address = TARGET_ADDRESS + _ea_extension_offset_bytes(case, operand) + disp + index
+        address = (
+            TARGET_ADDRESS + _ea_extension_offset_bytes(case, operand) + disp + index
+        )
     elif mode == 13:
-        address = TARGET_ADDRESS + _ea_extension_offset_bytes(case, operand) + in_disp + index
+        address = (
+            TARGET_ADDRESS + _ea_extension_offset_bytes(case, operand) + in_disp + index
+        )
     elif mode in {14, 15}:
         inner = (
             TARGET_ADDRESS
@@ -1413,13 +1574,19 @@ def _control_trampoline(
     name = case["instruction_name"]
     if name not in {"jmp", "jsr"}:
         return [], None
-    memory_operands = [operand for operand in case.get("operands", []) if operand.get("type") == "mem"]
+    memory_operands = [
+        operand for operand in case.get("operands", []) if operand.get("type") == "mem"
+    ]
     if not memory_operands:
         return [], "control transfer has no resolvable memory operand"
     address, auxiliary = _effective_memory(case, memory_operands[0], state, aregs)
     if address is None:
         return [], "control transfer target is not resolvable"
-    if address + 6 > RAM_BYTES or address >= 0xFF000000 or overlaps_microprogram(address, 6):
+    if (
+        address + 6 > RAM_BYTES
+        or address >= 0xFF000000
+        or overlaps_microprogram(address, 6)
+    ):
         return [], f"control transfer target {address:#x} is outside safe RAM"
     return auxiliary + [(address, _encode_jmp(TAIL_ADDRESS))], None
 
@@ -1580,9 +1747,15 @@ def _qemu_gap_reason(record: dict[str, Any]) -> str | None:
     return None
 
 
-def build_microprogram(case: dict[str, Any], state: State) -> tuple[bytes, list[str], str | None]:
+def build_microprogram(
+    case: dict[str, Any], state: State
+) -> tuple[bytes, list[str], str | None]:
     if case["instruction_name"] in TERMINAL_NO_POSTSTATE:
-        return b"", [], "terminal instruction has no following plugin-visible post-state"
+        return (
+            b"",
+            [],
+            "terminal instruction has no following plugin-visible post-state",
+        )
     if case["instruction_name"] in UNSUPPORTED_CONTROL:
         return b"", [], "control-flow fixture is not safely constructible"
     if case["instruction_name"] in ARCHITECTED_EXCEPTION_NAMES or case[
@@ -1598,7 +1771,9 @@ def build_microprogram(case: dict[str, Any], state: State) -> tuple[bytes, list[
         **case,
         "operands": [dict(operand) for operand in case.get("operands", [])],
     }
-    encoded = relocate_encoding(case, _patch_control_displacement(case, bytes.fromhex(case["bytes"])))
+    encoded = relocate_encoding(
+        case, _patch_control_displacement(case, bytes.fromhex(case["bytes"]))
+    )
     setup, aregs, state = _setup_bytes(state, case)
     memory, error = _memory_initializers(case, state, aregs)
     if error:
@@ -1710,7 +1885,9 @@ def execute_one(
     ]
     timed_out = False
     with qemu_log.open("w") as log_file:
-        process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, text=True)
+        process = subprocess.Popen(
+            command, stdout=log_file, stderr=subprocess.STDOUT, text=True
+        )
         try:
             qemu_status = process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
@@ -1749,7 +1926,9 @@ def execute_one(
         str(report),
         str(trace),
     ]
-    trace_proc = subprocess.run(trace_command, text=True, capture_output=True, check=False)
+    trace_proc = subprocess.run(
+        trace_command, text=True, capture_output=True, check=False
+    )
     if not report.exists():
         return {
             **base_result,
@@ -1783,8 +1962,10 @@ def execute_one(
     else:
         frame = target_frames[0]
         frame_result = frame.get("result", "unknown")
-        result_name = "pass" if frame_result == "success" else (
-            "skip" if frame_result == "skipped" else "fail"
+        result_name = (
+            "pass"
+            if frame_result == "success"
+            else ("skip" if frame_result == "skipped" else "fail")
         )
         result = {
             **base_result,
@@ -1879,7 +2060,10 @@ def run_manifest(args: argparse.Namespace) -> None:
     args.work_dir.mkdir(parents=True, exist_ok=True)
     args.results.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if args.resume else "w"
-    print(f"executing {len(executions)} M68K matrix cases with {args.jobs} workers", file=sys.stderr)
+    print(
+        f"executing {len(executions)} M68K matrix cases with {args.jobs} workers",
+        file=sys.stderr,
+    )
     with args.results.open(mode) as output:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
             futures = {
@@ -1968,18 +2152,28 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             "MC68881 transcendental ops need RzIL float operators that are "
             "not present; Rizin does not invent FCOS/FSIN/FLOG/FETOX"
         )
-    elif fail and gap and (
-        _is_producer_illegal(record)
-        or _is_truncated_extension_capture(record)
-        or frame in {"unimplemented", "invalid_op"}
-        or _mac_su_mismatch(record)
+    elif (
+        fail
+        and gap
+        and (
+            _is_producer_illegal(record)
+            or _is_truncated_extension_capture(record)
+            or frame in {"unimplemented", "invalid_op"}
+            or _mac_su_mismatch(record)
+        )
     ):
         record["result"] = "skip"
         record["skip_class"] = "qemu-incorrect-implementation"
         record["reason"] = gap
     elif fail and (
         _is_producer_illegal(record)
-        or (path == "user-privilege" and (frame in {"unimplemented", "invalid_op"} or _is_truncated_extension_capture(record)))
+        or (
+            path == "user-privilege"
+            and (
+                frame in {"unimplemented", "invalid_op"}
+                or _is_truncated_extension_capture(record)
+            )
+        )
     ):
         architected = (
             name in EXCEPTION_SEMANTIC_NAMES
@@ -2082,7 +2276,9 @@ FAILURE_CLASS_DESCRIPTIONS = {
 }
 
 
-def summarize(manifest: dict[str, Any], results: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def summarize(
+    manifest: dict[str, Any], results: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
     counts: dict[str, int] = {}
     by_id: dict[int, dict[str, Any]] = {}
     by_profile: dict[str, dict[str, int]] = {profile: {} for profile in PROFILES}
@@ -2122,7 +2318,9 @@ def summarize(manifest: dict[str, Any], results: Sequence[dict[str, Any]]) -> di
             )
             class_entry["count"] += 1
             instr = class_entry["instructions"]
-            instr[result["instruction_name"]] = instr.get(result["instruction_name"], 0) + 1
+            instr[result["instruction_name"]] = (
+                instr.get(result["instruction_name"], 0) + 1
+            )
     normalized_by_id = []
     for entry in by_id.values():
         normalized_by_id.append(
@@ -2144,7 +2342,9 @@ def summarize(manifest: dict[str, Any], results: Sequence[dict[str, Any]]) -> di
         "instructions": sorted(normalized_by_id, key=lambda item: item["id"]),
         "skip_reasons": [
             {"reason": reason, "count": count}
-            for reason, count in sorted(skip_reasons.items(), key=lambda item: (-item[1], item[0]))
+            for reason, count in sorted(
+                skip_reasons.items(), key=lambda item: (-item[1], item[0])
+            )
         ],
         "failure_classes": [
             {
@@ -2154,7 +2354,8 @@ def summarize(manifest: dict[str, Any], results: Sequence[dict[str, Any]]) -> di
                 "top_instructions": [
                     {"instruction": instr, "count": count}
                     for instr, count in sorted(
-                        value["instructions"].items(), key=lambda item: (-item[1], item[0])
+                        value["instructions"].items(),
+                        key=lambda item: (-item[1], item[0]),
                     )[:15]
                 ],
             }
@@ -2212,7 +2413,9 @@ def markdown_report(summary: dict[str, Any]) -> str:
         )
     lines.extend(["", "## Failure root-cause classes", ""])
     if summary["failure_classes"]:
-        lines.extend(["| Class | Count | Meaning | Top instructions |", "|---|---:|---|---|"])
+        lines.extend(
+            ["| Class | Count | Meaning | Top instructions |", "|---|---:|---|---|"]
+        )
         for item in summary["failure_classes"]:
             top = ", ".join(
                 f"{entry['instruction']}×{entry['count']}"
@@ -2235,10 +2438,7 @@ def markdown_report(summary: dict[str, Any]) -> str:
             lines.append(f"- … {extra} additional skip reasons")
     else:
         lines.append("None.")
-    zero_pass = [
-        item for item in summary["instructions"]
-        if item.get("pass", 0) == 0
-    ]
+    zero_pass = [item for item in summary["instructions"] if item.get("pass", 0) == 0]
     lines.extend(
         [
             "",
@@ -2262,7 +2462,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    manifest_parser = subparsers.add_parser("manifest", help="build the canonical case manifest")
+    manifest_parser = subparsers.add_parser(
+        "manifest", help="build the canonical case manifest"
+    )
     manifest_parser.add_argument("--rizin-source", type=Path, required=True)
     manifest_parser.add_argument("--rizin", type=Path, required=True)
     manifest_parser.add_argument("--output", type=Path, required=True)
@@ -2279,7 +2481,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     run_parser.add_argument("--limit", type=int)
     run_parser.add_argument("--case-regex")
     run_parser.add_argument("--resume", action="store_true")
-    run_parser.add_argument("--keep", choices=("none", "failures", "all"), default="failures")
+    run_parser.add_argument(
+        "--keep", choices=("none", "failures", "all"), default="failures"
+    )
 
     summary_parser = subparsers.add_parser("summarize", help="summarize JSONL results")
     summary_parser.add_argument("--manifest", type=Path, required=True)

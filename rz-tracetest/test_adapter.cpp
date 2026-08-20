@@ -82,9 +82,9 @@ static void TestMachines() {
 
 static void TestFloatConversions() {
 	struct FloatCase {
-		uint16_t signexp;
-		uint64_t significand;
-		uint64_t normalized_significand;
+			uint16_t signexp;
+			uint64_t significand;
+			uint64_t normalized_significand;
 	};
 	static const FloatCase values[] = {
 		{ 0x0000, 0x0000000000000000ULL, 0x0000000000000000ULL }, // +0
